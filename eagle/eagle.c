@@ -70,7 +70,9 @@ KHASH_MAP_INIT_STR(rsh, fasta_t *)   // hashmap: string key, vector value
 static khash_t(rsh) *refseq_hash; // pointer to hashmap
 static pthread_mutex_t refseq_lock; 
 
+// sepearte snp and another
 static vector_t *vcf_read(FILE *file) {
+    print_status("# start vcf_read:\t%s", asctime(time_info));
     vector_t *var_list = vector_create(8, VARIANT_T);
 
     char *line = NULL;
@@ -87,6 +89,7 @@ static vector_t *vcf_read(FILE *file) {
 
         int n1, n2;
         char *s1, *s2, ref_token[strlen(ref) + 1], alt_token[strlen(alt) + 1];
+        // add snp vcf to vector 
         for (s1 = ref; sscanf(s1, "%[^, ]%n", ref_token, &n1) == 1 || sscanf(s1, "%[-]%n", ref_token, &n1) == 1; s1 += n1 + 1) { // heterogenenous non-reference (comma-delimited) as separate entries
             for (s2 = alt; sscanf(s2, "%[^, ]%n", alt_token, &n2) == 1 || sscanf(s2, "%[-]%n", alt_token, &n2) == 1; s2 += n2 + 1) {
                 if (alt_token[0] != '.' && alt_token[0] != '*' && strcmp("<*:DEL>", alt_token) != 0) {
@@ -101,6 +104,7 @@ static vector_t *vcf_read(FILE *file) {
     free(line); line = NULL;
     fclose(file);
     qsort(var_list->data, var_list->len, sizeof (void *), nat_sort_variant);
+    print_status("# end vcf_read:\t%s", asctime(time_info));
     return var_list;
 }
 
@@ -173,6 +177,7 @@ static fasta_t *refseq_fetch(char *name, const char *fa_file) {
         if (errno == 0) { fai = fai_load(fa_file); }
         else { exit_err("failed to build and open FA index %s\n", fa_file); }
     }
+   
     if (!faidx_has_seq(fai, name)) { exit_err("failed to find %s in reference %s\n", name, fa_file); }
 
     fasta_t *f = fasta_create(name);
@@ -673,6 +678,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
 
     i = 0;
     vector_t *var_set = vector_create(var_list->len, VOID_T);
+    print_status("# line 678:\t%s", asctime(time_info));
     if (sharedr == 1) { /* Variants that share a read: shared with a given first variant */
         while (i < var_list->len) {
             vector_t *curr = vector_create(8, VARIANT_T);
@@ -709,6 +715,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
         }
     }
     else { /* Variants that are close together as sets */
+        print_status("# line 717:\t%s", asctime(time_info));
         while (i < var_list->len) {
             vector_t *curr = vector_create(8, VARIANT_T);
             vector_add(curr, var_data[i]);
@@ -721,6 +728,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_add(var_set, curr);
         }
     }
+    print_status("# line 727:\t%s", asctime(time_info));
     /* Heterozygous non-reference variants as separate entries */
     int flag_add = 1;
     while (flag_add) {
@@ -758,7 +766,8 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                 }
             }
         }
-    } 
+    }
+    print_status("# line 766:\t%s", asctime(time_info));
     if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else { print_status("# Variants within %d (max window: %d) bp: %i entries\t%s", distlim, maxdist, (int)var_set->len, asctime(time_info)); }
@@ -772,19 +781,22 @@ static void process(const vector_t *var_list, FILE *out_fh) {
     vector_t *queue = vector_create(var_set->len, VOID_T);
     vector_t *results = vector_create(var_set->len, VOID_T);
     for (i = 0; i < var_set->len; i++) vector_add(queue, var_set->data[i]);
+    print_status("# line 783:\t%s", asctime(time_info));
 
     work_t *w = malloc(sizeof (work_t));
     w->queue = queue;
     w->results = results;
     w->len = var_set->len;
-
+    print_status("# line 789:\t%s", asctime(time_info));
     pthread_mutex_init(&w->q_lock, NULL);
     pthread_mutex_init(&w->r_lock, NULL);
 
+    print_status("# line 791:\t%s", asctime(time_info));
     pthread_t tid[nthread];
     for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
+    print_status("# line 795:\t%s", asctime(time_info));
     for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
-
+    print_status("# line 796:\t%s", asctime(time_info));
     pthread_mutex_destroy(&w->q_lock);
     pthread_mutex_destroy(&w->r_lock);
 
@@ -814,7 +826,7 @@ static void print_usage() {
     printf("  -m --maxh     INT    Maximum number of combinations in the set of hypotheses, instead of all 2^n. [1024]\n");
     printf("     --mvh             Output the maximum likelihood hypothesis in the set instead of marginal probabilities.\n");
     printf("     --pao             Primary alignments only.\n");
-    printf("     --isc             Ignore soft-clipped bases.\n");
+    printf("     --isc             Ignore  soft-clipped bases.\n");
     printf("     --nodup           Ignore marked duplicate reads (based on SAM flag).\n");
     printf("     --splice          RNA-seq spliced reads.\n");
     printf("     --bs       INT    Bisulfite treated reads. 0: off, 1: top/forward strand, 2: bottom/reverse strand, 3: both. [0]\n");
@@ -966,7 +978,9 @@ int main(int argc, char **argv) {
     refseq_hash = kh_init(rsh);
 
     pthread_mutex_init(&refseq_lock, NULL);
+    print_status("# start process:\t%s", asctime(time_info));
     process(var_list, out_fh);
+    print_status("# end process:\t%s", asctime(time_info));
     if (out_file != NULL) fclose(out_fh);
     else fflush(stdout);
     pthread_mutex_destroy(&refseq_lock);

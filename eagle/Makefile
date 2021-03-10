@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-g -Wall -O2 -pthread -march=native
+CFLAGS=-g -Wall -O2 -pthread -march=native -fcommon
 
 HTSDIR=htslib
 INCLUDES=-I$(HTSDIR)
