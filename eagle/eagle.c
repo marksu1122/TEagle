@@ -70,6 +70,12 @@ KHASH_MAP_INIT_STR(rsh, fasta_t *)   // hashmap: string key, vector value
 static khash_t(rsh) *refseq_hash; // pointer to hashmap
 static pthread_mutex_t refseq_lock; 
 
+
+/* Teagle */
+FILE *readlist;
+/* output file name*/
+static char *readlist_name = "readlist_exp";
+
 // sepearte snp and another
 static vector_t *vcf_read(FILE *file) {
     print_status("# start vcf_read:\t%s", asctime(time_info));
@@ -478,7 +484,6 @@ static char *evaluate(vector_t *var_set) {
     /* Variant combinations as a vector of vectors */
     //vector_t *combo = powerset(var_set->len, maxh);
     vector_t *combo = all_and_singletons(var_set->len);
-
     /*
     for (seti = 0; seti < combo->len; seti++) { // Print combinations
         fprintf(stderr, "%d\t", (int)seti); 
@@ -486,11 +491,40 @@ static char *evaluate(vector_t *var_set) {
         for (i = 0; i < ((vector_int_t *)combo->data[seti])->len; i++) { variant_t *v = var_data[((vector_int_t *)combo->data[seti])->data[i]]; fprintf(stderr, "%s,%d,%s,%s;", v->chr, v->pos, v->ref, v->alt); } fprintf(stderr, "\n"); 
     }
     */
-
     vector_t *stats = vector_create(var_set->len + 1, STATS_T);
 
     for (seti = 0; seti < combo->len; seti++) { // all, singles
         stats_t *s = stats_create((vector_int_t *)combo->data[seti], read_list->len);
+        
+        /* Teagle */
+        if(combo->len > 1 && seti != 0){
+            //do something
+            int altseq_length = 0;
+            char *altseq = NULL;
+            altseq = construct_altseq(refseq, refseq_length, s->combo, var_data, &altseq_length);
+            if (read_list->len != 0) {
+                 //cut altseq to 2*read_len seq
+                ///*
+                int start = var_data[0]->pos - (read_data[0]->length);
+                int end = var_data[0]->pos + (read_data[0]->length);
+                char *cut_altseq = NULL;
+                cut_altseq = (char*)malloc(sizeof(char));
+                cut_altseq = substring(cut_altseq, altseq, start, end - start);
+                //read_list->alt_cut = cut_altseq;
+                fprintf(readlist, ">%zu\t%s\t%s\t%d\n", read_list->len,var_data[0]->ref,var_data[0]->alt,var_data[0]->pos);
+                fprintf(readlist, "%s\n", cut_altseq);
+                int q = 0;
+                for(q = 0; q < read_list->len; q++){
+                    char char_qual[read_data[q]->length];
+                    for(int i = 0; i < read_data[q]->length; i++){
+                        read_data[q]->qual[i] = (read_data[q]->qual[i]+33);
+                        char_qual[i] = (char)read_data[q]->qual[i];
+                    }
+                    fprintf(readlist, "%d %s\n",read_data[q]->is_reverse,read_data[q]->qseq);
+                }
+            }
+        }
+
         calc_likelihood(s, var_set, refseq, refseq_length, read_data, read_list->len, seti, seqnt_map);
         vector_add(stats, s);
     }
@@ -678,7 +712,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
 
     i = 0;
     vector_t *var_set = vector_create(var_list->len, VOID_T);
-    print_status("# line 678:\t%s", asctime(time_info));
     if (sharedr == 1) { /* Variants that share a read: shared with a given first variant */
         while (i < var_list->len) {
             vector_t *curr = vector_create(8, VARIANT_T);
@@ -715,7 +748,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
         }
     }
     else { /* Variants that are close together as sets */
-        print_status("# line 717:\t%s", asctime(time_info));
         while (i < var_list->len) {
             vector_t *curr = vector_create(8, VARIANT_T);
             vector_add(curr, var_data[i]);
@@ -728,7 +760,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_add(var_set, curr);
         }
     }
-    print_status("# line 727:\t%s", asctime(time_info));
     /* Heterozygous non-reference variants as separate entries */
     int flag_add = 1;
     while (flag_add) {
@@ -767,7 +798,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             }
         }
     }
-    print_status("# line 766:\t%s", asctime(time_info));
+
     if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else { print_status("# Variants within %d (max window: %d) bp: %i entries\t%s", distlim, maxdist, (int)var_set->len, asctime(time_info)); }
@@ -781,7 +812,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
     vector_t *queue = vector_create(var_set->len, VOID_T);
     vector_t *results = vector_create(var_set->len, VOID_T);
     for (i = 0; i < var_set->len; i++) vector_add(queue, var_set->data[i]);
-    print_status("# line 783:\t%s", asctime(time_info));
 
     work_t *w = malloc(sizeof (work_t));
     w->queue = queue;
@@ -966,6 +996,9 @@ int main(int argc, char **argv) {
 
     FILE *out_fh = stdout;
     if (out_file != NULL) out_fh = fopen(out_file, "w"); // default output file handle is stdout unless output file option is used
+    
+    /* Teagle */
+    readlist = fopen(readlist_name, "w");
 
     init_seqnt_map(seqnt_map);
     init_q2p_table(p_match, p_mismatch, 50);
@@ -983,6 +1016,9 @@ int main(int argc, char **argv) {
     print_status("# end process:\t%s", asctime(time_info));
     if (out_file != NULL) fclose(out_fh);
     else fflush(stdout);
+    /* Teagle */
+    fclose(readlist);
+
     pthread_mutex_destroy(&refseq_lock);
 
     khiter_t k;
