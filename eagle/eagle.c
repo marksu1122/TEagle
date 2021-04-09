@@ -71,10 +71,83 @@ static khash_t(rsh) *refseq_hash; // pointer to hashmap
 static pthread_mutex_t refseq_lock; 
 
 
-/* Teagle */
+
+
+// Teagle 
 FILE *readlist;
-/* output file name*/
+// output file name
 static char *readlist_name = "readlist_exp";
+
+static char *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length){
+    char *altseq;
+    //vcf pos start from 1, choose where to start
+    int pos = variant->pos - 1;
+    if (pos < 0 || pos > refseq_length) { exit_err("Variant at %s:%d is out of bounds in reference\n", variant->chr, variant->pos); }
+
+    char *var_ref, *var_alt;
+    if (variant->ref[0] == '-') { // account for "-" variant representations
+        var_ref = "";
+        var_alt = variant->alt;
+    }
+    else if (variant->alt[0] == '-') { // account for "-" variant representations
+        var_ref = variant->ref;
+        var_alt = "";
+    }
+    else {
+        char *s1 = variant->ref;
+        char *s2 = variant->alt;
+        while (*s1 == *s2) { // account for and disregard common prefix in variant
+            s1++;
+            s2++;
+            pos++;
+        }
+        var_ref = s1;
+        var_alt = s2;
+    }
+    // 修改 REF
+    size_t var_alt_length = strlen(var_ref);
+    size_t var_ref_length = strlen(var_alt);
+    int delta = var_alt_length - var_ref_length;
+
+    if (delta == 0) { // snps, equal length haplotypes
+        altseq = strdup(refseq);
+        memcpy(altseq + pos, var_alt, var_alt_length * sizeof (*var_alt));
+    }
+    else { // indels
+        altseq = malloc((refseq_length + delta + 1) * sizeof (*refseq));
+        memcpy(altseq, refseq, pos * sizeof (*refseq));
+        memcpy(altseq + pos, var_alt, var_alt_length * sizeof (*refseq));
+        memcpy(altseq + pos + var_alt_length, refseq + pos + var_ref_length, (refseq_length - pos - var_ref_length) * sizeof (*refseq));
+        refseq_length += delta;
+        altseq[refseq_length] = '\0';
+    }
+    // printf("%s \n",altseq);
+    
+    // 計算 CUT 的 起點
+    if(var_alt_length !=0){
+        pos += var_alt_length/2;
+        printf("%d \n",pos);
+    }
+    
+    if(pos - hypo_length < 0){
+        pos = 0;
+    }else if(pos + hypo_length > refseq_length){
+        pos = refseq_length - 2 * hypo_length;
+    }else{
+        pos = pos - hypo_length;
+    }
+
+    if(2*hypo_length > refseq_length){
+        hypo_length = refseq_length / 2;
+    }
+    // CUT 
+    char *hypo = malloc((2*hypo_length + 1) * sizeof (*altseq));
+    memcpy(hypo, altseq+pos, (2*hypo_length) * sizeof (*altseq));
+    hypo[2*hypo_length] = '\0';
+    free(altseq);
+
+    return hypo;
+}
 
 // sepearte snp and another
 static vector_t *vcf_read(FILE *file) {
@@ -480,6 +553,19 @@ static char *evaluate(vector_t *var_set) {
         return NULL;
     }
     read_t **read_data = (read_t **)read_list->data;
+    // Teagle
+    fprintf(readlist, "> var_set :%zu\n",var_set->len);
+    int hypo_length = 50;
+    for (int i = 0; i < var_set->len; i++){
+        //Construct alt seq;
+        fprintf(readlist, "> %s\t%s\t%d\n",var_data[i]->ref, var_data[i]->alt, var_data[i]->pos); 
+        char *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length);
+        fprintf(readlist, "%s\n", hyposeq);
+    }
+    fprintf(readlist, "> read_list :%zu\n", read_list->len);
+    for (int i = 0; i < read_list->len;i++){
+        fprintf(readlist, "%d %d %s\n",read_data[i]->index,read_data[i]->is_reverse,read_data[i]->qseq);
+    }
 
     /* Variant combinations as a vector of vectors */
     //vector_t *combo = powerset(var_set->len, maxh);
@@ -495,36 +581,6 @@ static char *evaluate(vector_t *var_set) {
 
     for (seti = 0; seti < combo->len; seti++) { // all, singles
         stats_t *s = stats_create((vector_int_t *)combo->data[seti], read_list->len);
-        
-        /* Teagle */
-        if(combo->len > 1 && seti != 0){
-            //do something
-            int altseq_length = 0;
-            char *altseq = NULL;
-            altseq = construct_altseq(refseq, refseq_length, s->combo, var_data, &altseq_length);
-            if (read_list->len != 0) {
-                 //cut altseq to 2*read_len seq
-                ///*
-                int start = var_data[0]->pos - (read_data[0]->length);
-                int end = var_data[0]->pos + (read_data[0]->length);
-                char *cut_altseq = NULL;
-                cut_altseq = (char*)malloc(sizeof(char));
-                cut_altseq = substring(cut_altseq, altseq, start, end - start);
-                //read_list->alt_cut = cut_altseq;
-                fprintf(readlist, ">%zu\t%s\t%s\t%d\n", read_list->len,var_data[0]->ref,var_data[0]->alt,var_data[0]->pos);
-                fprintf(readlist, "%s\n", cut_altseq);
-                int q = 0;
-                for(q = 0; q < read_list->len; q++){
-                    char char_qual[read_data[q]->length];
-                    for(int i = 0; i < read_data[q]->length; i++){
-                        read_data[q]->qual[i] = (read_data[q]->qual[i]+33);
-                        char_qual[i] = (char)read_data[q]->qual[i];
-                    }
-                    fprintf(readlist, "%d %s\n",read_data[q]->is_reverse,read_data[q]->qseq);
-                }
-            }
-        }
-
         calc_likelihood(s, var_set, refseq, refseq_length, read_data, read_list->len, seti, seqnt_map);
         vector_add(stats, s);
     }
@@ -760,6 +816,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_add(var_set, curr);
         }
     }
+    //print_status("# flag_add  var_set->len :%d \t%s",var_set->len, asctime(time_info));
     /* Heterozygous non-reference variants as separate entries */
     int flag_add = 1;
     while (flag_add) {
@@ -784,9 +841,11 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                 }
             }
             else { // multiple entries comprising a set
+                //print_status("# curr_set->len: %d \t%s ",curr_set->len, asctime(time_info));
                 for (j = 0; j < curr_set->len - 1; j++) {
                     variant_t *curr = (variant_t *)curr_set->data[j];
                     variant_t *next = (variant_t *)curr_set->data[j + 1];
+                    //print_status("# curr_set : %d \t%s ", curr->pos,asctime(time_info));
                     if (curr->pos == next->pos) {
                         flag_add = 1;
                         vector_t *dup = vector_dup(curr_set);
@@ -798,6 +857,8 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             }
         }
     }
+
+
 
     if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
