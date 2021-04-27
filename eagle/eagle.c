@@ -17,6 +17,17 @@ This program is distributed under the terms of the GNU General Public License
 #include "htslib/sam.h"
 #include "htslib/faidx.h"
 #include "htslib/khash.h"
+
+#include <string.h>
+#include "bwa/bwamem.h"
+#include "bwa/bntseq.h"
+#include "bwa/bwa.h"
+#include "bwa/bwtindex.c"
+#include "bwa/bwt.h"
+#include "bwa/kseq.h"
+#include "bwa/kvec.h"
+KSEQ_DECLARE(gzFile)
+
 #include "vector.h"
 #include "util.h"
 #include "calc.h"
@@ -76,9 +87,10 @@ static pthread_mutex_t refseq_lock;
 // Teagle 
 FILE *readlist;
 // output file name
-static char *readlist_name = "readlist_exp";
+static char *readlist_name = "readlist_exp1";
 
 static char *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length){
+    
     char *altseq;
     //vcf pos start from 1, choose where to start
     int pos = variant->pos - 1;
@@ -104,11 +116,11 @@ static char *hypothesis_seq(const char *refseq, int refseq_length, variant_t *va
         var_ref = s1;
         var_alt = s2;
     }
+   
     // 修改 REF
     size_t var_alt_length = strlen(var_ref);
     size_t var_ref_length = strlen(var_alt);
     int delta = var_alt_length - var_ref_length;
-
     if (delta == 0) { // snps, equal length haplotypes
         altseq = strdup(refseq);
         memcpy(altseq + pos, var_alt, var_alt_length * sizeof (*var_alt));
@@ -147,6 +159,161 @@ static char *hypothesis_seq(const char *refseq, int refseq_length, variant_t *va
     free(altseq);
 
     return hypo;
+}
+//TODO
+char *get_FAname(char *fileName) {
+    char * FAname = malloc(sizeof *fileName * (strlen(fileName) + 6));
+    strcpy(FAname, fileName);
+    char *last_dot = strrchr(FAname, '.');
+    if (last_dot != NULL){
+        *last_dot = '\0';
+    }
+    strncat(FAname, ".fasta", 7);
+    return FAname;
+}
+
+static vector_t * get_Read(const char *fq_file,int *hypo_length){
+    gzFile fp;
+    kseq_t *ks;
+    FILE *read_FA;
+    fp = gzopen(fq_file, "r");
+    if(fp == NULL ) {
+        // file doesn't exist
+        printf("Couldn't open %s.\n",fq_file);
+        return 1;
+    }
+    ks = kseq_init(fp); // initialize the FASTA/Q parser
+    char *fa_name;
+    fa_name = get_FAname(fq_file);
+    read_FA = fopen(fa_name, "w");
+
+    vector_t *FA_list = vector_create(8, VARIANT_T);
+
+    while (kseq_read(ks) >= 0){ // read one sequence
+        fprintf(read_FA, ">%s\n", ks->name.s);
+        fprintf(read_FA, "%s\n", ks->seq.s);
+        *hypo_length = ks->seq.l;
+        //fprintf(read_FA, "%s\n", ks->qual.s);
+        variant_t *r = variant_create(ks->name.s, 0, ks->seq.s, ks->qual.s);
+        vector_add(FA_list, r);
+    }
+
+    kseq_destroy(ks);
+    fclose(read_FA);
+    gzclose(fp);
+
+    return FA_list;
+}
+
+static vector_t *Gradu(vector_t * FA_list, bwaidx_t *idx,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
+
+    variant_t **read_data = (variant_t **)FA_list->data;
+
+    vector_t *candidate = vector_create(8, VARIANT_T);
+
+    for (int i = 0; i < varset_len; i++){
+        //Construct alt seq;
+        char *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length);
+        char *seq;
+		int x = 0;
+        int l_seq = strlen(hyposeq);
+		seq = malloc(l_seq);
+        memcpy(seq, hyposeq, l_seq); 
+        for (int a = 0; a < l_seq; ++a) // convert to 2-bit encoding if we have not done so
+			seq[a] = seq[a] < 4? seq[a] : nst_nt4_table[(int)seq[a]];
+
+        bwtintv_v temp = {0,0,0}; // temp.n = temp.m = temp.a = 0;
+
+        while (x < l_seq) {
+            if (seq[x] < 4) {
+                x = bwt_smem1(idx->bwt, l_seq, (uint8_t*)seq, x, 1, &temp, 0);
+				for (int i = 0; i < temp.n; ++i) { 
+					bwtintv_t *p = &temp.a[i];
+					int l_smem = (uint32_t)p->info - (p->info>>32);
+					if (l_smem >= 16){
+						//traverse each hit
+						fprintf(readlist, "len: %d\ttimes: %ld\n",l_smem,p->x[2]);
+						for (int j = 0; j < p->x[2];j++){
+							uint64_t pos = bwt_sa(idx->bwt, p->x[0] + j); // get suffix array coordinate
+                            int id;
+                            if (pos<idx->bwt->seq_len>> 1){
+                                //forward
+                                id = pos / hypo_length;
+                            }
+                            else{
+                                //backward
+                                pos -= idx->bwt->seq_len >> 1;
+                                id = pos / hypo_length;
+                                //reverse;
+                                read_data[id]->pos = 1;
+                                //strrev(read_data[id]->ref);
+                                //strrev(read_data[id]->alt);
+                                for (int k = 0; k < hypo_length; k++){
+                                    if(read_data[id]->ref[k] == 'A'){
+                                        read_data[id]->ref[k] = 'T';
+                                    }
+                                    else if (read_data[id]->ref[k] == 'T'){
+                                        read_data[id]->ref[k] = 'A';
+                                    }
+                                    else if (read_data[id]->ref[k] == 'C'){
+                                        read_data[id]->ref[k] = 'G';
+                                    }
+                                    else if (read_data[id]->ref[k] == 'G'){
+                                        read_data[id]->ref[k] = 'G';
+                                    }
+                                    else{
+                                        //error
+                                    }
+                                }
+                            }
+                            //TODO pos = 0;
+
+                            // fprintf(readlist, "pos: %d\t id: %d\n",pos,id);
+                            // fprintf(readlist, "read[%d]: %s\n",id,read_data[id]->ref);
+                            //compare read_data[id]->ref
+                            vector_add(candidate, read_data[id]);
+                        }
+					}
+                }
+            }else ++x;
+        }
+        // pile-up
+
+        //compare read_data[id]->ref
+        //TODO reverse
+        variant_t **D1 = (variant_t **)candidate->data;
+        read_t **D2 = (read_t **)read_list->data;
+
+        // pile-up
+        fprintf(readlist, "> read_list :%zu\n", read_list->len);
+        for (int y = 0; y < read_list->len;y ++){
+            fprintf(readlist, "%d %d %s\n",D2[y]->index,D2[y]->is_reverse,D2[y]->qseq);
+        }
+        if(candidate->len > 0){
+            fprintf(readlist, "====================\n");
+        }
+        for (int c = 0; c < candidate->len; c++){
+            char *a = D1[c]->ref;
+            int has = 0;
+            for (int d = 0; d < read_list->len; d++){
+                read_t *xx = D2[d];
+                char *b = D2[d]->qseq;
+                if(strcmp(a , b ) == 0){
+                    has = 1;
+                    break;
+                }
+            }
+            if(has == 0){
+                fprintf(readlist, "hit:  %s \n",a);
+            }
+        }
+        if(candidate->len > 0){
+            fprintf(readlist, "====================\n");
+        }
+    }
+
+    bwa_idx_destroy(idx);
+    return read_list;
 }
 
 // sepearte snp and another
@@ -553,19 +720,25 @@ static char *evaluate(vector_t *var_set) {
         return NULL;
     }
     read_t **read_data = (read_t **)read_list->data;
+
+
     // Teagle
-    fprintf(readlist, "> var_set :%zu\n",var_set->len);
-    int hypo_length = 50;
-    for (int i = 0; i < var_set->len; i++){
-        //Construct alt seq;
-        fprintf(readlist, "> %s\t%s\t%d\n",var_data[i]->ref, var_data[i]->alt, var_data[i]->pos); 
-        char *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length);
-        fprintf(readlist, "%s\n", hyposeq);
-    }
-    fprintf(readlist, "> read_list :%zu\n", read_list->len);
-    for (int i = 0; i < read_list->len;i++){
-        fprintf(readlist, "%d %d %s\n",read_data[i]->index,read_data[i]->is_reverse,read_data[i]->qseq);
-    }
+    int hypo_length;
+    vector_t *new_read_list;
+    char *FAname = "../../data/read/BS_read.fasta";
+    vector_t *FA_list = get_Read("../../data/read/BS_read.fastq",&hypo_length);
+    //TODO index
+    char *index_argv[2];
+    index_argv[0] = "index";
+    index_argv[1] = FAname;
+    //int ret = bwa_index(2, index_argv); //BUG
+    
+    // fprintf(readlist, "FAname: %s\n", FAname);
+    bwaidx_t *idx;
+    idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
+    new_read_list = Gradu(FA_list,idx,read_list,refseq,refseq_length,var_data,var_set->len,hypo_length);
+    //fprintf(readlist, "> var_set :%zu\n",var_set->len);
+
 
     /* Variant combinations as a vector of vectors */
     //vector_t *combo = powerset(var_set->len, maxh);
