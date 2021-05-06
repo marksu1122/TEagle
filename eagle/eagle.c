@@ -236,7 +236,7 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
         mem_alnreg_v ar;
         mem_opt_t *opt;
         opt = mem_opt_init(); 
-        ar = mem_align1_core(opt, idx->bwt, idx->bns, idx->pac, strlen(hyposeq), hyposeq); // get all the hits
+        ar = mem_align1(opt, idx->bwt, idx->bns, idx->pac, strlen(hyposeq), hyposeq); // get all the hits
 
         kstring_t str;
         kvec_t(mem_aln_t) aa;
@@ -267,18 +267,9 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
             if (!(opt->flag & MEM_F_KEEP_SUPP_MAPQ) && l && !p->is_alt && q->mapq > aa.a[0].mapq)
                 q->mapq = aa.a[0].mapq; // lower mapq for supplementary mappings, unless -5 or -q is applied
             ++l;
-            
-        }
-        int k;
 
-        if (aa.n != 0) // no alignments good enough; then write an unaligned record
-            for (k = 0; k < aa.n; ++k)
-                mem_aln2sam(opt, idx->bns, &str, s, aa.n, aa.a, k, 0);
-            for (k = 0; k < aa.n; ++k) free(aa.a[k].cigar);
-            free(aa.a);
         }
-        fprintf(readlist, "====================\n");
-
+        
 
 
 
