@@ -154,12 +154,7 @@ static char *hypothesis_seq(const char *refseq, int refseq_length, variant_t *va
 
     fprintf(temp, "%s\n",hypo);
     fclose(temp);
-    //TODO IDX
-    // char *index_argv[2];
-    // index_argv[0] = "index";
-    // index_argv[1] = "./temp";
-    // int ret = bwa_index(2, index_argv); 
-    system("./bwa/bwa index ./temp.fa");
+    // system("./bwa/bwa index ./temp.fa");
 
     return hypo;
 }
@@ -230,7 +225,6 @@ static char* strrev(char *str){
     return str;
 }
 
-
 static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
 
     bseq1_t **FAread_data = (bseq1_t **)FA_readlist->data;
@@ -238,70 +232,56 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
     for (int i = 0; i < varset_len; i++){
         //Construct alt seq;
         char *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length);
-        char *seq;
-		int x = 0;
-        int l_seq = strlen(hyposeq);
-		seq = malloc(l_seq);
-        memcpy(seq, hyposeq, l_seq); 
-        for (int a = 0; a < l_seq; ++a) // convert to 2-bit encoding if we have not done so
-			seq[a] = seq[a] < 4? seq[a] : nst_nt4_table[(int)seq[a]];
-        bwtintv_v temp = {0,0,0}; // temp.n = temp.m = temp.a = 0;
-
-        int CL = 0;
-        int *candidate[50];
-        //TODO check if pos right
-        while (x < l_seq) {
-            if (seq[x] < 4) {
-                x = bwt_smem1(idx->bwt, l_seq, (uint8_t*)seq, x, 1, &temp, 0);
-				for (int i = 0; i < temp.n; ++i) { 
-					bwtintv_t *p = &temp.a[i];
-					int l_smem = (uint32_t)p->info - (p->info>>32);
-					if (l_smem >= 16){
-						//traverse each hit
-						for (int j = 0; j < p->x[2];j++){
-							uint64_t pos = bwt_sa(idx->bwt, p->x[0] + j); // get suffix array coordinate
-                            int id;
-                            if (pos<idx->bwt->seq_len>> 1){//forward
-                                id = pos / hypo_length;
-                            }
-                            else{//backward
-                                pos -= idx->bwt->seq_len >> 1;
-                                id = pos / hypo_length;
-                            }
-                            candidate[CL] = id;
-                            CL++;
-                        }
-                    }
-                }
-            }else ++x;
-        }
-
-        //redo
-        idx = bwa_idx_load("./temp.fa", BWA_IDX_ALL); // load the BWA index
-        
-        mem_alnreg_v ar;
-
         fprintf(readlist, "====================\n");
+        mem_alnreg_v ar;
         mem_opt_t *opt;
         opt = mem_opt_init(); 
-        for (int c = 0; c < CL; c++){
-            int now = candidate[c]; //ID
-            //bseq1_t * temp= FAread_data[now];
-            char *seq = FAread_data[now]->seq;
-            int l_seq =  FAread_data[now]->l_seq;
-            ar = mem_align1(opt, idx->bwt, idx->bns, idx->pac, l_seq, seq); // get all the hits
-            for (int j = 0; j < ar.n; ++j) { // traverse each hit
-                mem_aln_t a;
-                if (ar.a[j].secondary >= 0) continue; // skip secondary alignments
-                a = mem_reg2aln(opt, idx->bns, idx->pac, l_seq, seq, &ar.a[j]); // get forward-strand position and CIGAR
-                // print alignment
-                fprintf(readlist,"QNAME: %s\tflag: %c\tRNAME: %s\tPOS: %ld\tMAPQ: %d\t", "ks->name.s", "+-"[a.is_rev], idx->bns->anns[a.rid].name, (long)a.pos, a.mapq);
-                for (int k = 0; k < a.n_cigar; ++k) // print CIGAR
-                	fprintf(readlist,"%d%c", a.cigar[k]>>4, "MIDSH"[a.cigar[k]&0xf]);
-                fprintf(readlist,"\t%d\n", a.NM); // print edit distance
-                free(a.cigar); // don't forget to deallocate CIGAR
-		    }
+        ar = mem_align1_core(opt, idx->bwt, idx->bns, idx->pac, strlen(hyposeq), hyposeq); // get all the hits
+
+        kstring_t str;
+        kvec_t(mem_aln_t) aa;
+        int l = 0;
+        char **XA = 0;
+        kv_init(aa);
+        str.l = str.m = 0; str.s = 0;
+        for (int j = 0; j < ar.n; ++j) { // traverse each hit
+            // mem_aln_t a;
+            // if (ar.a[j].secondary >= 0) continue; // skip secondary alignments
+            // a = mem_reg2aln(opt, idx->bns, idx->pac, strlen(hyposeq), hyposeq, &ar.a[j]); // get forward-strand position and CIGAR
+            // // print alignment
+            // fprintf(readlist,"QNAME: %s\tflag: %c\tRNAME: %s\tPOS: %ld\tMAPQ: %d\t", "ks->name.s", "+-"[a.is_rev], idx->bns->anns[a.rid].name, (long)a.pos, a.mapq);
+            // for (int k = 0; k < a.n_cigar; ++k) // print CIGAR
+            //     fprintf(readlist,"%d%c", a.cigar[k]>>4, "MIDSH"[a.cigar[k]&0xf]);
+            // fprintf(readlist,"\t%d\n", a.NM); // print edit distance
+            // free(a.cigar); // don't forget to deallocate CIGAR
+            mem_alnreg_t *p = &ar.a[j];
+		    mem_aln_t *q;
+            q = kv_pushp(mem_aln_t, aa);
+            *q = mem_reg2aln(opt, idx->bns, idx->pac, strlen(hyposeq), hyposeq, p);
+            assert(q->rid >= 0); // this should not happen with the new code
+            q->XA = XA? XA[j] : 0;
+            q->flag |= 0; // flag secondary
+            if (p->secondary >= 0) q->sub = -1; // don't output sub-optimal score
+            if (l && p->secondary < 0) // if supplementary
+                q->flag |= (opt->flag&MEM_F_NO_MULTI)? 0x10000 : 0x800;
+            if (!(opt->flag & MEM_F_KEEP_SUPP_MAPQ) && l && !p->is_alt && q->mapq > aa.a[0].mapq)
+                q->mapq = aa.a[0].mapq; // lower mapq for supplementary mappings, unless -5 or -q is applied
+            ++l;
+            
         }
+        int k;
+
+        if (aa.n != 0) // no alignments good enough; then write an unaligned record
+            for (k = 0; k < aa.n; ++k)
+                mem_aln2sam(opt, idx->bns, &str, s, aa.n, aa.a, k, 0);
+            for (k = 0; k < aa.n; ++k) free(aa.a[k].cigar);
+            free(aa.a);
+        }
+        fprintf(readlist, "====================\n");
+
+
+
+
         free(opt);
         fprintf(readlist, "====================\n");
 
