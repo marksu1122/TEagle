@@ -227,13 +227,8 @@ static char* strrev(char *str){
 static int check(char *name,vector_t * read_list){
     //TODO reverse
     read_t **read = (read_t **)read_list->data;
-    // bseq1_t **read = (bseq1_t **)read_list->data;
     for (int i = 0; i < read_list->len;i++){
-        // fprintf(readlist,"%s\n",read[i]->name);
-        // fprintf(readlist,"%s\n",read[i]->chr);
-        // fprintf(readlist,"%s\n",read[i]->qseq);
         if(!strcmp(name , read[i]->name)){
-            // fprintf(readlist,"%s\n",read[i]->seq);
             return 0;
         }
     }
@@ -332,7 +327,7 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
     hyporead->qual = malloc(hyporead->length  * sizeof (hyporead->qual));
 
 
-    //TODO
+    //TODO reverse and check
     uint8_t *qual = (uint8_t*)FA_read->qual;
 
     uint8_t *seq = (uint8_t*)malloc(hyporead->length);
@@ -387,6 +382,7 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
             
             a = mem_reg2aln(opt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr, &ar.a[j]); // get forward-strand position and CIGAR
             //check(idx->bns->anns[a.rid].name, FA_readlist);
+            //TODO reverse
 
             char *name = strdup(idx->bns->anns[a.rid].name);
             
@@ -400,8 +396,8 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
                     if(!strcmp(name , FAread_data[z]->name)){
                         mem_aln_t b;
                         b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, FAread_data[z]->l_seq, FAread_data[z]->seq, &ar.a[j]);
-                        read_t *read = gethypoRead(FAread_data[z],ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
-                        
+                        read_t *hypoRead = gethypoRead(FAread_data[z],ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
+                        vector_add(read_list, hypoRead);
                     }
                 }
             }
