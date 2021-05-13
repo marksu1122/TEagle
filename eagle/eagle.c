@@ -161,7 +161,7 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
     return hypo_seq;
 }
 
-//TODO read_tread_tread_tread_tread_tread_t
+//TODO read_t
 char *get_FAname(char *fileName) {
     char * FAname = malloc(sizeof *fileName * (strlen(fileName) + 6));
     strcpy(FAname, fileName);
@@ -272,6 +272,30 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
         return NULL;
     }
 
+    //TODO BWA897 & isrev 
+    uint8_t *seq = (uint8_t*)malloc(FA_read->l_seq);
+    uint8_t *qual = (uint8_t*)malloc(FA_read->l_seq);
+
+
+    if(!p->is_rev){
+        int qb = 0, qe = FA_read->l_seq;
+        // if (p->n_cigar && which && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) { // have cigar && not the primary alignment && not softclip all
+		// 	if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qb += p->cigar[0]>>4;
+		// 	if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qe -= p->cigar[p->n_cigar-1]>>4;
+		// }
+		for (i = qb; i < qe; ++i) seq[i] = nst_nt4_table[(int)FA_read->seq[i]];
+		for (i = qb; i < qe; ++i) qual[i] = (uint8_t*)FA_read->qual[i];
+    }else{
+        int qb = 0, qe = FA_read->l_seq;
+		// if (p->n_cigar && which && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) {
+		// 	if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qe -= p->cigar[0]>>4;
+		// 	if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qb += p->cigar[p->n_cigar-1]>>4;
+		// }
+        for (i = qe-1; i >= qb; --i) seq[i] = nst_nt4_table[(int)FA_read->seq[i]];
+        for (i = qe-1; i >= qb; --i) qual[i] = (uint8_t*)FA_read->qual[i];
+    }
+
+
     int start_align = 0;
     int s_offset = 0; // offset for softclip at start
     int e_offset = 0; // offset for softclip at end
@@ -327,11 +351,6 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
 
 
     //TODO reverse and check
-    uint8_t *qual = (uint8_t*)FA_read->qual;
-
-    uint8_t *seq = (uint8_t*)malloc(hyporead->length);
-	for (i = 0; i < hyporead->length ; ++i) // convert to 2-bit encoding if we have not done so
-		seq[i] = seq[i] < 4? seq[i] : nst_nt4_table[(int)seq[i]];
 
     for (i = 0; i < hyporead->length; i++) {
         hyporead->qseq[i] = toupper(seq_nt16_str[bam_seqi(seq, i + s_offset)]); // get nucleotide id and convert into IUPAC id.
