@@ -161,7 +161,7 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
     return hypo_seq;
 }
 
-//TODOread_tread_tread_tread_tread_tread_t
+//TODO read_tread_tread_tread_tread_tread_t
 char *get_FAname(char *fileName) {
     char * FAname = malloc(sizeof *fileName * (strlen(fileName) + 6));
     strcpy(FAname, fileName);
@@ -238,7 +238,6 @@ static int check(char *name,vector_t * read_list){
 read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, int pao, int isc, int nodup, int splice, int phred64, int const_qual){
     read_t * hyporead = read_create(name, b.rid, ref_idx->bns->anns[b.rid].name, b.pos+1);
     int i, j;
-
     //TODO FLAG
     mem_aln_t *p = &b, mtmp,*m = 0;
 	//set flag
@@ -310,7 +309,7 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
     }
 
     hyporead->cigar_opchr[hyporead->n_cigar] = '\0';
-    //read->inferred_length = bam_cigar2qlen(read->n_cigar, cigar); //TODO
+    //read->inferred_length = bam_cigar2qlen(read->n_cigar, cigar); //TODO check
     hyporead->inferred_length = inferred_length;
     hyporead->n_splice = j;
 
@@ -360,28 +359,46 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
         //Construct alt seq;
         int *hypo_pos = malloc(sizeof(int));
         region_t *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length,hypo_pos);
+        // fprintf(readlist, "hypo: %s\n",hyposeq->chr);
         mem_alnreg_v ar;
         mem_opt_t *opt;
         opt = mem_opt_init(); 
         ar = mem_align1(opt, idx->bwt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr); // get all the hits
         int start = hyposeq->pos1;
         int end = hyposeq->pos2;
-
+        // if(ar.n==0){
+        //     fprintf(readlist, "no hits\n");
+        // }else{
+        //     fprintf(readlist, "has %d hits\n",ar.n);
+        // }
         for (int j = 0; j < ar.n; ++j) { // traverse each hit
             int qb,qlen= ar.a[j].qe - ar.a[j].qb;
-            if(start >= ar.a[j].qe ||end <= ar.a[j].qb){ //NOT cover hypo_part
-                continue;
-            }else if(ar.a[j].qb >= start){
-                //反推qb
-                qb = ar.a[j].qe - (strlen(var_data[i]->alt) - strlen(var_data[i]->ref)) - strlen(hyposeq->chr);
-            }else{
-                qb = ar.a[j].qb;
-            }
+            // if(start >= ar.a[j].qe ||end <= ar.a[j].qb){ //NOT cover hypo_part
+            //     // fprintf(readlist, "hit %d : not cover hypo part\n",j);
+            //     continue;
+            // }else if(ar.a[j].qb >= start){
+            //     //反推qb
+            //     qb = ar.a[j].qe - (strlen(var_data[i]->alt) - strlen(var_data[i]->ref)) - strlen(hyposeq->chr);
+            // }else{
+            //     qb = ar.a[j].qb;
+            // }
             mem_aln_t a;
-            if (ar.a[j].secondary >= 0) continue; // skip secondary alignments
-            
+            // if (ar.a[j].secondary >= 0) { //TODO??
+            //     // fprintf(readlist, "hit %d : secondary >= 0\n",j);
+            //     continue; // skip secondary alignments
+            // }
             a = mem_reg2aln(opt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr, &ar.a[j]); // get forward-strand position and CIGAR
-            //check(idx->bns->anns[a.rid].name, FA_readlist);
+            fprintf(readlist,"=================\nhypo: %s\n",hyposeq->chr);
+            for (int z = 0; z < FA_readlist->len; z++){
+                if(!strcmp(idx->bns->anns[a.rid].name , FAread_data[z]->name)){
+                    fprintf(readlist,"read: %s\n",FAread_data[z]->seq);
+                }
+            }
+            fprintf(readlist,"%s\t%c\t%s\t%ld\t%d\t", "J02459.1", "+-"[a.is_rev], idx->bns->anns[a.rid].name, (long)a.pos, a.mapq);
+			for (int k = 0; k < a.n_cigar; ++k) // print CIGAR
+				fprintf(readlist,"%d%c", a.cigar[k]>>4, "MIDSH"[a.cigar[k]&0xf]);
+			fprintf(readlist,"\t%d\n", a.NM); // print edit distance
+			free(a.cigar); // don't forget to deallocate CIGAR
             //TODO reverse
 
             char *name = strdup(idx->bns->anns[a.rid].name);
@@ -394,12 +411,21 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
             if(check(name, read_list)){
                 for (int z = 0; z < FA_readlist->len; z++){
                     if(!strcmp(name , FAread_data[z]->name)){
+                        // fprintf(readlist, "======================\n",j);
                         mem_aln_t b;
                         b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, FAread_data[z]->l_seq, FAread_data[z]->seq, &ar.a[j]);
+                        // fprintf(readlist, "name: %s\t%s\n",FAread_data[z]->name,FAread_data[z]->seq);
+                        fprintf(readlist,"%s\t%c\t%s\t%ld\t%d\t", FAread_data[z]->name, "+-"[b.is_rev], ref_idx->bns->anns[b.rid].name, (long)b.pos, b.mapq);
+                        for (int k = 0; k < b.n_cigar; ++k) // print CIGAR
+                            fprintf(readlist,"%d%c", b.cigar[k]>>4, "MIDSH"[b.cigar[k]&0xf]);
+                        fprintf(readlist,"\t%d\n", b.NM); // print edit distance
                         read_t *hypoRead = gethypoRead(FAread_data[z],ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
                         vector_add(read_list, hypoRead);
+                        // fprintf(readlist, "======================\n",j);
                     }
                 }
+            }else{
+                // fprintf(readlist, "hit %d : already exist\n",j);
             }
 
         }
@@ -832,6 +858,10 @@ static char *evaluate(vector_t *var_set) {
     // fprintf(readlist, "FAname: %s\n", FAname);
     bwaidx_t *idx;
     idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
+    // for (readi = 0; readi < read_list->len; readi++) {
+    //     fprintf(readlist, "%s\t%s\t%d;\t", read_data[readi]->name, read_data[readi]->chr, read_data[readi]->pos);
+    // }
+    // fprintf(readlist, "\n");
     new_read_list = Gradu(FA_readlist,idx,read_list,refseq,refseq_length,var_data,var_set->len,hypo_length);
     //fprintf(readlist, "> var_set :%zu\n",var_set->len);
 
