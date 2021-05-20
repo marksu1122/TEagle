@@ -13,7 +13,7 @@ This program is distributed under the terms of the GNU General Public License
 #include <stdint.h>
 #include "htslib/sam.h"
 
-enum type {VOID_T, STATS_T, VARIANT_T, READ_T, FASTA_T, REGION_T};
+enum type {VOID_T, STATS_T, VARIANT_T, READ_T, FASTA_T, REGION_T,BSEQ_T};
 
 typedef struct {
     size_t len, size;
@@ -29,6 +29,7 @@ void vector_add(vector_t *a, void *entry);
 void vector_del(vector_t *a, size_t i);
 void *vector_pop(vector_t *a);
 vector_t *vector_dup(vector_t *a);
+vector_t *vector_dup_rni(vector_t *a);
 
 typedef struct {
     size_t len, size;

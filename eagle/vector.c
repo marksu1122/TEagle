@@ -93,6 +93,23 @@ vector_t *vector_dup(vector_t *a) {
     return v;
 }
 
+vector_t *vector_dup_rni(vector_t *a) {
+    // typedef struct {
+    //     size_t len, size;
+    //     void **data;
+    //     enum type type;
+    // } vector_t;
+    vector_t *v = vector_create(a->len, a->type);
+    v->len = a->len;
+    v->size = a->size;
+    v->type = a->type;
+    for(int i=0; i<a->len; i++){
+        v->data[i] = (void *)malloc(a->size*sizeof(void));
+        memcpy(v->data[i], a->data[i], (a->size)*sizeof(void));
+    }
+    return v;
+}
+
 void vector_int_init(vector_int_t *a, size_t initial_size) {
     a->len = 0;
     a->size = initial_size;

@@ -87,7 +87,7 @@ static pthread_mutex_t refseq_lock;
 // Teagle 
 FILE *readlist;
 // output file name
-static char *readlist_name = "readlist_exp1";
+static char *readlist_name = "BUG";
 
 static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length,int *hypo_pos){
 
@@ -116,13 +116,12 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
         var_ref = s1;
         var_alt = s2;
     }
-    fprintf(readlist, "%d\t%s\t%s\n",variant->pos,variant->ref,variant->alt);
     // 修改 REF
     size_t var_alt_length = strlen(var_alt);
     size_t var_ref_length = strlen(var_ref);
 
     //TODO if hypolength > read ???  or 
-
+    //TODO DELetion
     char *hypo = malloc((2*hypo_length + var_alt_length+1) * sizeof (*refseq));
     int start = pos - hypo_length;
     int start_hypo,end_hypo;
@@ -157,7 +156,6 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
         memcpy(hypo+hypo_length+var_alt_length, refseq+pos+var_ref_length-1, hypo_length * sizeof (*refseq));
         hypo[2*hypo_length+var_alt_length] = '\0';
     }
-    fprintf(readlist, "strat_pos:%d\t%s\n",*hypo_pos,hypo);
     region_t *hypo_seq = region_create(hypo, start_hypo, end_hypo);//start_ =qb,end_hypo = rb
     return hypo_seq;
 }
@@ -239,7 +237,6 @@ static int check(char *name,vector_t * read_list){
 read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, int pao, int isc, int nodup, int splice, int phred64, int const_qual){
     read_t * hyporead = read_create(name, b.rid, ref_idx->bns->anns[b.rid].name, b.pos+1);
     int i, j;
-    //TODO FLAG
     mem_aln_t *p = &b, mtmp,*m = 0;
 	//set flag
     p->flag |= m? 0x1 : 0; // is paired in sequencing
@@ -272,7 +269,6 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
         return NULL;
     }
 
-    //TODO BWA897 & isrev 
     char *seq = (char*)malloc(FA_read->l_seq);
     char *qual = (char*)malloc(FA_read->l_seq);
 
@@ -286,15 +282,27 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
 		for (i = qb; i < qe; ++i) seq[i] = FA_read->seq[i];//nst_nt4_table[(int)FA_read->seq[i]];
 		for (i = qb; i < qe; ++i) qual[i] = FA_read->qual[i];
     }else{
-        //TODO check
         int qb = 0, qe = FA_read->l_seq;
-		// if (p->n_cigar && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) {
+		//TODO check
+        // if (p->n_cigar && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) {
 		// 	if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qe -= p->cigar[0]>>4;
 		// 	if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qb += p->cigar[p->n_cigar-1]>>4;
 		// }
-        //TODO reverse complement ATCGN TAGAN
-        for (i = qe-1; i >= qb; --i) seq[i] = FA_read->seq[i];//nst_nt4_table[(int)FA_read->seq[i]];
+        for (i = qe-1; i >= qb; --i){
+            if(FA_read->seq[i] == 'A'){
+                seq[i] = 'T';
+            }else if(FA_read->seq[i] =='T'){
+                seq[i] = 'A';
+            }else if(FA_read->seq[i] =='C'){
+                seq[i] = 'G';
+            }else if(FA_read->seq[i] =='G'){
+                seq[i] = 'C';
+            }else{
+                seq[i] = FA_read->seq[i];//nst_nt4_table[(int)FA_read->seq[i]];
+            }
+        } 
         for (i = qe-1; i >= qb; --i) qual[i] = FA_read->qual[i];
+
     }
 
 
@@ -335,7 +343,6 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
     }
 
     hyporead->cigar_opchr[hyporead->n_cigar] = '\0';
-    //read->inferred_length = bam_cigar2qlen(read->n_cigar, cigar); //TODO check
     hyporead->inferred_length = inferred_length;
     hyporead->n_splice = j;
 
@@ -397,7 +404,6 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
             }
             //TODO need? or get pos to get rid and ten get name
             a = mem_reg2aln(opt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr, &ar.a[j]); // get forward-strand position and CIGAR
-            //TODO reverse
 
             char *name = strdup(idx->bns->anns[a.rid].name);
             //TODO overflow??
@@ -407,7 +413,6 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
             ar.a[j].rb = *hypo_pos + qb - 1;
             ar.a[j].re = ar.a[j].rb + qlen;
             if(check(name, read_list)){
-                fprintf(readlist, "HIT!!!!!\n");
                 fprintf(readlist, "%d\t%s\t%s\t", var_data[i]->pos, var_data[i]->ref, var_data[i]->alt);
                 for (int z = 0; z < FA_readlist->len; z++){
                     if(!strcmp(name , FAread_data[z]->name)){
@@ -1115,14 +1120,11 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_add(var_set, curr);
         }
     }
-    print_status("# flag_add  var_set->len :%d \t%s",var_set->len, asctime(time_info));
     /* Heterozygous non-reference variants as separate entries */
     int flag_add = 1;
     while (flag_add) {
         flag_add = 0;
-        print_status("#%d \t var_set->len: %d \t%s ", __LINE__,var_set->len, asctime(time_info));
         for (i = 0; i < var_set->len; i++) {
-            print_status("#%d \t var_set->len: %d \t%s ", __LINE__,var_set->len, asctime(time_info));
             vector_t *curr_set = (vector_t *)var_set->data[i];
             if (curr_set->len == 1) continue;
             int flag_nonset = 1;
@@ -1143,64 +1145,105 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             }
             else { // multiple entries comprising a set
                 // print_status("#%d \t curr_set->len: %d \t%s ", __LINE__,curr_set->len, asctime(time_info));
-                for (j = 0; j < curr_set->len - 1; j++) {
+                // for (j = 0; j < curr_set->len - 1; j++) {
+                //     variant_t *curr = (variant_t *)curr_set->data[j];
+                //     variant_t *next = (variant_t *)curr_set->data[j + 1];
+                //     //print_status("#%d \t curr_set : %d \t%s ", __LINE__, curr->pos,asctime(time_info));
+                //     if (curr->pos == next->pos) {
+                //         flag_add = 1;
+                //         vector_t *dup = vector_dup(curr_set);
+                //         vector_del(curr_set, j);
+                //         vector_del(dup, j + 1);
+                //         vector_add(var_set, dup);
+                //     }
+                // }
+                vector_t *dup = vector_create(8, VARIANT_T);
+                for (j = 0; j < curr_set->len - 1;) {
                     variant_t *curr = (variant_t *)curr_set->data[j];
                     variant_t *next = (variant_t *)curr_set->data[j + 1];
-                    //print_status("#%d \t curr_set : %d \t%s ", __LINE__, curr->pos,asctime(time_info));
                     if (curr->pos == next->pos) {
                         flag_add = 1;
-                        vector_t *dup = vector_dup(curr_set);
-                        vector_del(curr_set, j);
-                        vector_del(dup, j + 1);
-                        vector_add(var_set, dup);
+                        vector_add(dup, next);
+                        vector_del(curr_set, j + 1);
+                    }else{
+                        while (dup->len > 0) {
+                            variant_t *add = (variant_t *)vector_pop(dup);
+                            vector_t *new = vector_dup_rni(curr_set);
+                            ((variant_t *)(new->data[j]))->chr = add->chr;
+                            ((variant_t *)(new->data[j]))->ref = add->ref;
+                            ((variant_t *)(new->data[j]))->alt = add->alt;
+                            vector_add(var_set, new);
+                        }
+                        j++;
                     }
+
+                }
+                while (dup->len > 0) {
+                    int k = curr_set->len - 1;
+                    variant_t *add = (variant_t *)vector_pop(dup);
+                    vector_t *new = vector_dup_rni(curr_set);
+                    fprintf(readlist, "ADDRESS new: %p\n", new);
+                    fprintf(readlist, "ADDRESS curr_set: %p\n", curr_set);
+                    fprintf(readlist, "Length curr_set: %d\n", curr_set->len);
+                    fprintf(readlist, "Size curr_set: %d\n", curr_set->size);
+                    fprintf(readlist, "ADDRESS new: alt %p\n", ((variant_t *)(new->data[k]))->alt);
+                    fprintf(readlist, "ADDRESS cur—set alt : %p\n\n", ((variant_t *)(curr_set->data[k]))->alt);
+                    //fprintf(readlist, "ADD: %s\t%d\t%s\t%s\n", add->chr, add->pos, add->ref, add->alt);
+                    // strcpy(((variant_t *)(new->data[k]))->chr, add->chr); //TODO
+                    // strcpy(((variant_t *)(new->data[k]))->ref, add->ref); //TODO
+                    // strcpy(((variant_t *)(new->data[k]))->alt, add->alt); //TODO
+                    ((variant_t *)(new->data[k]))->chr = strdup(add->chr);
+                    ((variant_t *)(new->data[k]))->ref = strdup(add->ref);
+                    ((variant_t *)(new->data[k]))->alt = strdup(add->alt);
+                    //fprintf(readlist, "NEW: %s\t%d\t%s\t%s\n", ((variant_t *)new->data[k])->chr, ((variant_t *)new->data[k])->pos, add->ref, ((variant_t *)new->data[k])->alt);
+                    //fprintf(readlist, "NEWaddr: %p\n",((variant_t *)new->data[k])->alt);
+                    //fprintf(readlist, "CURR: %s\t%d\t%s\t%s\n", ((variant_t *)curr_set->data[k])->chr, ((variant_t *)curr_set->data[k])->pos, add->ref, ((variant_t *)curr_set->data[k])->alt);
+                    //fprintf(readlist, "CURRaddr: %p\n",((variant_t *)curr_set->data[k])->alt);
+                    vector_add(var_set, new);
                 }
             }
-        }
+        } 
     }
 
 
 
-    if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
-    else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
-    else { print_status("# Variants within %d (max window: %d) bp: %i entries\t%s", distlim, maxdist, (int)var_set->len, asctime(time_info)); }
+    // if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
+    // else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
+    // else { print_status("# Variants within %d (max window: %d) bp: %i entries\t%s", distlim, maxdist, (int)var_set->len, asctime(time_info)); }
 
-    print_status("# Options: maxh=%d mvh=%d pao=%d isc=%d nodup=%d splice=%d bs=%d lowmem=%d phred64=%d\n", maxh, mvh, pao, isc, nodup, splice, bisulfite, lowmem, phred64);
-    print_status("#          dp=%d gap_op=%d gap_ex=%d\n", dp, gap_op, gap_ex);
-    print_status("#          hetbias=%g omega=%g cq=%d\n", hetbias, omega, const_qual);
-    print_status("#          verbose=%d\n", verbose);
-    print_status("# Start: %d threads \t%s\t%s", nthread, bam_file, asctime(time_info));
+    // print_status("# Options: maxh=%d mvh=%d pao=%d isc=%d nodup=%d splice=%d bs=%d lowmem=%d phred64=%d\n", maxh, mvh, pao, isc, nodup, splice, bisulfite, lowmem, phred64);
+    // print_status("#          dp=%d gap_op=%d gap_ex=%d\n", dp, gap_op, gap_ex);
+    // print_status("#          hetbias=%g omega=%g cq=%d\n", hetbias, omega, const_qual);
+    // print_status("#          verbose=%d\n", verbose);
+    // print_status("# Start: %d threads \t%s\t%s", nthread, bam_file, asctime(time_info));
 
-    vector_t *queue = vector_create(var_set->len, VOID_T);
-    vector_t *results = vector_create(var_set->len, VOID_T);
-    for (i = 0; i < var_set->len; i++) vector_add(queue, var_set->data[i]);
+    // vector_t *queue = vector_create(var_set->len, VOID_T);
+    // vector_t *results = vector_create(var_set->len, VOID_T);
+    // for (i = 0; i < var_set->len; i++) vector_add(queue, var_set->data[i]);
 
-    work_t *w = malloc(sizeof (work_t));
-    w->queue = queue;
-    w->results = results;
-    w->len = var_set->len;
-    print_status("# line 789:\t%s", asctime(time_info));
-    pthread_mutex_init(&w->q_lock, NULL);
-    pthread_mutex_init(&w->r_lock, NULL);
+    // work_t *w = malloc(sizeof (work_t));
+    // w->queue = queue;
+    // w->results = results;
+    // w->len = var_set->len;
 
-    print_status("# line 791:\t%s", asctime(time_info));
-    pthread_t tid[nthread];
-    for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
-    print_status("# line 795:\t%s", asctime(time_info));
-    for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
-    print_status("# line 796:\t%s", asctime(time_info));
-    pthread_mutex_destroy(&w->q_lock);
-    pthread_mutex_destroy(&w->r_lock);
+    // pthread_mutex_init(&w->q_lock, NULL);
+    // pthread_mutex_init(&w->r_lock, NULL);
 
-    free(w); w = NULL;
-    vector_free(var_set); //variants in var_list so don't destroy
+    // pthread_t tid[nthread];
+    // for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
+    // for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
+    // pthread_mutex_destroy(&w->q_lock);
+    // pthread_mutex_destroy(&w->r_lock);
 
-    qsort(results->data, results->len, sizeof (void *), nat_sort_vector);
-    fprintf(out_fh, "# SEQ\tPOS\tREF\tALT\tReads\tRefReads\tAltReads\tProb\tOdds\tSet\n");
-    for (i = 0; i < results->len; i++) fprintf(out_fh, "%s", (char *)results->data[i]);
-    vector_destroy(queue); free(queue); queue = NULL;
-    vector_destroy(results); free(results); results = NULL;
-    print_status("# Done:\t%s\t%s", bam_file, asctime(time_info));
+    // free(w); w = NULL;
+    // vector_free(var_set); //variants in var_list so don't destroy
+
+    // qsort(results->data, results->len, sizeof (void *), nat_sort_vector);
+    // fprintf(out_fh, "# SEQ\tPOS\tREF\tALT\tReads\tRefReads\tAltReads\tProb\tOdds\tSet\n");
+    // for (i = 0; i < results->len; i++) fprintf(out_fh, "%s", (char *)results->data[i]);
+    // vector_destroy(queue); free(queue); queue = NULL;
+    // vector_destroy(results); free(results); results = NULL;
+    // print_status("# Done:\t%s\t%s", bam_file, asctime(time_info));
 }
 
 static void print_usage() {
