@@ -442,12 +442,18 @@ static vector_t *vcf_read(FILE *file) {
     vector_t *var_list = vector_create(8, VARIANT_T);
 
     char *line = NULL;
+    char *prev = "";
     ssize_t read_file = 0;
     size_t line_length = 0;
     while ((read_file = getline(&line, &line_length, file)) != -1) {
         if (line_length <= 0 || line[strspn(line, " \t\v\r\n")] == '\0') continue; // blank line
         if (line[0] == '#') continue;
 
+        if(!strcmp(line,prev)){//same
+            continue;
+        }else{
+            prev = strdup(line);
+        }
         int pos;
         char chr[line_length], ref[line_length], alt[line_length];
         int t = sscanf(line, "%s %d %*[^\t] %s %s", chr, &pos, ref, alt);
@@ -468,6 +474,7 @@ static vector_t *vcf_read(FILE *file) {
         }
     }
     free(line); line = NULL;
+    free(prev); prev = NULL;
     fclose(file);
     qsort(var_list->data, var_list->len, sizeof (void *), nat_sort_variant);
     print_status("# end vcf_read:\t%s", asctime(time_info));
@@ -1120,6 +1127,14 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_add(var_set, curr);
         }
     }
+    for (i = 0; i < var_set->len; i++) {
+        vector_t *curr_set = (vector_t *)var_set->data[i];
+        fprintf(readlist, "============ var_set[%d] 	 curr_set->len: %d============\n", i, curr_set->len);
+        for (j = 0; j < curr_set->len; j++){
+            variant_t *curr = (variant_t *)curr_set->data[j];
+            fprintf(readlist, "#%d \tpos: %d\tref: %s\talt: %s\n", j, curr->pos, curr->ref, curr->alt);
+        }
+    }
     /* Heterozygous non-reference variants as separate entries */
     int flag_add = 1;
     while (flag_add) {
@@ -1128,7 +1143,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_t *curr_set = (vector_t *)var_set->data[i];
             if (curr_set->len == 1) continue;
             int flag_nonset = 1;
-            // print_status("#%d \t curr_set->len: %d \t%s ", __LINE__,curr_set->len, asctime(time_info));
+
             for (j = 0; j < curr_set->len - 1; j++) { // check if all entries have the same position
                 variant_t *curr = (variant_t *)curr_set->data[j];
                 variant_t *next = (variant_t *)curr_set->data[j + 1];
@@ -1144,19 +1159,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                 }
             }
             else { // multiple entries comprising a set
-                // print_status("#%d \t curr_set->len: %d \t%s ", __LINE__,curr_set->len, asctime(time_info));
-                // for (j = 0; j < curr_set->len - 1; j++) {
-                //     variant_t *curr = (variant_t *)curr_set->data[j];
-                //     variant_t *next = (variant_t *)curr_set->data[j + 1];
-                //     //print_status("#%d \t curr_set : %d \t%s ", __LINE__, curr->pos,asctime(time_info));
-                //     if (curr->pos == next->pos) {
-                //         flag_add = 1;
-                //         vector_t *dup = vector_dup(curr_set);
-                //         vector_del(curr_set, j);
-                //         vector_del(dup, j + 1);
-                //         vector_add(var_set, dup);
-                //     }
-                // }
                 vector_t *dup = vector_create(8, VARIANT_T);
                 for (j = 0; j < curr_set->len - 1;) {
                     variant_t *curr = (variant_t *)curr_set->data[j];
@@ -1168,6 +1170,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                     }else{
                         while (dup->len > 0) {
                             variant_t *add = (variant_t *)vector_pop(dup);
+                            // vector_t *new = vector_dup(curr_set);
                             vector_t *new = vector_dup_rni(curr_set);
                             ((variant_t *)(new->data[j]))->chr = add->chr;
                             ((variant_t *)(new->data[j]))->ref = add->ref;
@@ -1181,31 +1184,16 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                 while (dup->len > 0) {
                     int k = curr_set->len - 1;
                     variant_t *add = (variant_t *)vector_pop(dup);
+                    // vector_t *new = vector_dup(curr_set);
                     vector_t *new = vector_dup_rni(curr_set);
-                    fprintf(readlist, "ADDRESS new: %p\n", new);
-                    fprintf(readlist, "ADDRESS curr_set: %p\n", curr_set);
-                    fprintf(readlist, "Length curr_set: %d\n", curr_set->len);
-                    fprintf(readlist, "Size curr_set: %d\n", curr_set->size);
-                    fprintf(readlist, "ADDRESS new: alt %p\n", ((variant_t *)(new->data[k]))->alt);
-                    fprintf(readlist, "ADDRESS cur—set alt : %p\n\n", ((variant_t *)(curr_set->data[k]))->alt);
-                    //fprintf(readlist, "ADD: %s\t%d\t%s\t%s\n", add->chr, add->pos, add->ref, add->alt);
-                    // strcpy(((variant_t *)(new->data[k]))->chr, add->chr); //TODO
-                    // strcpy(((variant_t *)(new->data[k]))->ref, add->ref); //TODO
-                    // strcpy(((variant_t *)(new->data[k]))->alt, add->alt); //TODO
                     ((variant_t *)(new->data[k]))->chr = strdup(add->chr);
                     ((variant_t *)(new->data[k]))->ref = strdup(add->ref);
                     ((variant_t *)(new->data[k]))->alt = strdup(add->alt);
-                    //fprintf(readlist, "NEW: %s\t%d\t%s\t%s\n", ((variant_t *)new->data[k])->chr, ((variant_t *)new->data[k])->pos, add->ref, ((variant_t *)new->data[k])->alt);
-                    //fprintf(readlist, "NEWaddr: %p\n",((variant_t *)new->data[k])->alt);
-                    //fprintf(readlist, "CURR: %s\t%d\t%s\t%s\n", ((variant_t *)curr_set->data[k])->chr, ((variant_t *)curr_set->data[k])->pos, add->ref, ((variant_t *)curr_set->data[k])->alt);
-                    //fprintf(readlist, "CURRaddr: %p\n",((variant_t *)curr_set->data[k])->alt);
                     vector_add(var_set, new);
                 }
             }
         } 
     }
-
-
 
     // if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     // else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }

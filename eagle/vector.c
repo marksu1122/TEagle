@@ -95,17 +95,23 @@ vector_t *vector_dup(vector_t *a) {
 
 vector_t *vector_dup_rni(vector_t *a) {
     // typedef struct {
-    //     size_t len, size;
-    //     void **data;
-    //     enum type type;
+    //     size_t len, size; //first part
+    //     void **data; //second part
+    //     enum type type; //first part
     // } vector_t;
-    vector_t *v = vector_create(a->len, a->type);
-    v->len = a->len;
-    v->size = a->size;
-    v->type = a->type;
+    
+    // allocate a new vector_t *
+    vector_t *v = (vector_t *)malloc(sizeof (vector_t));
+    v->data = (void **)malloc(a->len * sizeof (void *));
+    
+    v->len = a->len;// assign the first part
+    v->size = a->size;// assign the first part
+    v->type = a->type;// assign the first part
+
+    // allocate and assign the second part
     for(int i=0; i<a->len; i++){
-        v->data[i] = (void *)malloc(a->size*sizeof(void));
-        memcpy(v->data[i], a->data[i], (a->size)*sizeof(void));
+        v->data[i] = (void *)malloc(sizeof(variant_t));
+        memcpy(v->data[i], a->data[i], sizeof(variant_t));
     }
     return v;
 }
