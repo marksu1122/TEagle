@@ -1119,27 +1119,35 @@ static void process(const vector_t *var_list, FILE *out_fh) {
             vector_t *curr = vector_create(8, VARIANT_T);
             vector_add(curr, var_data[i]);
             j = i + 1;
+            int combination = 1,repeat =0;
             while (distlim > 0 && j < var_list->len && strcmp(var_data[j]->chr, var_data[j - 1]->chr) == 0 && abs(var_data[j]->pos - var_data[j - 1]->pos) <= distlim) {
                 if (maxdist > 0 && abs(var_data[j]->pos - var_data[i]->pos) > maxdist) break;
-                vector_add(curr, var_data[j++]);
+                //TODO maybe seperate indel and snp
+                if(var_data[j-1]->pos == var_data[j]->pos && (strlen(var_data[j]->ref) != strlen(var_data[j]->alt))){
+                    vector_t *indel = vector_create(8, VARIANT_T);
+                    vector_add(indel, var_data[j++]);
+                    vector_add(var_set, indel);
+                }else{
+                    vector_add(curr, var_data[j++]);
+                }
             }
             i = j;
             vector_add(var_set, curr);
         }
     }
-    for (i = 0; i < var_set->len; i++) {
-        vector_t *curr_set = (vector_t *)var_set->data[i];
-        fprintf(readlist, "============ var_set[%d] 	 curr_set->len: %d============\n", i, curr_set->len);
-        for (j = 0; j < curr_set->len; j++){
-            variant_t *curr = (variant_t *)curr_set->data[j];
-            fprintf(readlist, "#%d \tpos: %d\tref: %s\talt: %s\n", j, curr->pos, curr->ref, curr->alt);
-        }
-    }
     /* Heterozygous non-reference variants as separate entries */
+    int stop = var_set->len;
     int flag_add = 1;
     while (flag_add) {
         flag_add = 0;
+        int x=0,y =0;
         for (i = 0; i < var_set->len; i++) {
+            // if(x > 0){
+            //     y += x;
+            //     print_status("# combinations: %d\ttotal: %d\t%s", x, y,asctime(time_info));
+            //     print_status("===============================\n");
+            //     x = 0;
+            // }
             vector_t *curr_set = (vector_t *)var_set->data[i];
             if (curr_set->len == 1) continue;
             int flag_nonset = 1;
@@ -1168,6 +1176,14 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                         vector_add(dup, next);
                         vector_del(curr_set, j + 1);
                     }else{
+                        // if(dup->len > 0){
+                        //     print_status("# duplicates in [%d] : %d\t%s", curr->pos , dup->len+1,asctime(time_info));
+                        //     if(x == 0){
+                        //         x += 1;
+                        //     }else{
+                        //         x = x * (dup->len + 1);
+                        //     }
+                        // }
                         while (dup->len > 0) {
                             variant_t *add = (variant_t *)vector_pop(dup);
                             // vector_t *new = vector_dup(curr_set);
@@ -1181,6 +1197,14 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                     }
 
                 }
+                // if(dup->len > 0){
+                //     print_status("# duplicates in [%d] : %d \t%s", ((variant_t *)curr_set->data[(curr_set->len-1)])->pos , dup->len+1 ,asctime(time_info));
+                //     if(x == 0){
+                //         x += 1;
+                //     }else{
+                //         x = x * (dup->len + 1);
+                //     }
+                // }
                 while (dup->len > 0) {
                     int k = curr_set->len - 1;
                     variant_t *add = (variant_t *)vector_pop(dup);
@@ -1192,46 +1216,47 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                     vector_add(var_set, new);
                 }
             }
-        } 
+        }
+        
     }
 
-    // if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
-    // else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
-    // else { print_status("# Variants within %d (max window: %d) bp: %i entries\t%s", distlim, maxdist, (int)var_set->len, asctime(time_info)); }
+    if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
+    else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
+    else { print_status("# Variants within %d (max window: %d) bp: %i entries\t%s", distlim, maxdist, (int)var_set->len, asctime(time_info)); }
 
-    // print_status("# Options: maxh=%d mvh=%d pao=%d isc=%d nodup=%d splice=%d bs=%d lowmem=%d phred64=%d\n", maxh, mvh, pao, isc, nodup, splice, bisulfite, lowmem, phred64);
-    // print_status("#          dp=%d gap_op=%d gap_ex=%d\n", dp, gap_op, gap_ex);
-    // print_status("#          hetbias=%g omega=%g cq=%d\n", hetbias, omega, const_qual);
-    // print_status("#          verbose=%d\n", verbose);
-    // print_status("# Start: %d threads \t%s\t%s", nthread, bam_file, asctime(time_info));
+    print_status("# Options: maxh=%d mvh=%d pao=%d isc=%d nodup=%d splice=%d bs=%d lowmem=%d phred64=%d\n", maxh, mvh, pao, isc, nodup, splice, bisulfite, lowmem, phred64);
+    print_status("#          dp=%d gap_op=%d gap_ex=%d\n", dp, gap_op, gap_ex);
+    print_status("#          hetbias=%g omega=%g cq=%d\n", hetbias, omega, const_qual);
+    print_status("#          verbose=%d\n", verbose);
+    print_status("# Start: %d threads \t%s\t%s", nthread, bam_file, asctime(time_info));
 
-    // vector_t *queue = vector_create(var_set->len, VOID_T);
-    // vector_t *results = vector_create(var_set->len, VOID_T);
-    // for (i = 0; i < var_set->len; i++) vector_add(queue, var_set->data[i]);
+    vector_t *queue = vector_create(var_set->len, VOID_T);
+    vector_t *results = vector_create(var_set->len, VOID_T);
+    for (i = 0; i < var_set->len; i++) vector_add(queue, var_set->data[i]);
 
-    // work_t *w = malloc(sizeof (work_t));
-    // w->queue = queue;
-    // w->results = results;
-    // w->len = var_set->len;
+    work_t *w = malloc(sizeof (work_t));
+    w->queue = queue;
+    w->results = results;
+    w->len = var_set->len;
 
-    // pthread_mutex_init(&w->q_lock, NULL);
-    // pthread_mutex_init(&w->r_lock, NULL);
+    pthread_mutex_init(&w->q_lock, NULL);
+    pthread_mutex_init(&w->r_lock, NULL);
 
-    // pthread_t tid[nthread];
-    // for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
-    // for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
-    // pthread_mutex_destroy(&w->q_lock);
-    // pthread_mutex_destroy(&w->r_lock);
+    pthread_t tid[nthread];
+    for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
+    for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
+    pthread_mutex_destroy(&w->q_lock);
+    pthread_mutex_destroy(&w->r_lock);
 
-    // free(w); w = NULL;
-    // vector_free(var_set); //variants in var_list so don't destroy
+    free(w); w = NULL;
+    vector_free(var_set); //variants in var_list so don't destroy
 
-    // qsort(results->data, results->len, sizeof (void *), nat_sort_vector);
-    // fprintf(out_fh, "# SEQ\tPOS\tREF\tALT\tReads\tRefReads\tAltReads\tProb\tOdds\tSet\n");
-    // for (i = 0; i < results->len; i++) fprintf(out_fh, "%s", (char *)results->data[i]);
-    // vector_destroy(queue); free(queue); queue = NULL;
-    // vector_destroy(results); free(results); results = NULL;
-    // print_status("# Done:\t%s\t%s", bam_file, asctime(time_info));
+    qsort(results->data, results->len, sizeof (void *), nat_sort_vector);
+    fprintf(out_fh, "# SEQ\tPOS\tREF\tALT\tReads\tRefReads\tAltReads\tProb\tOdds\tSet\n");
+    for (i = 0; i < results->len; i++) fprintf(out_fh, "%s", (char *)results->data[i]);
+    vector_destroy(queue); free(queue); queue = NULL;
+    vector_destroy(results); free(results); results = NULL;
+    print_status("# Done:\t%s\t%s", bam_file, asctime(time_info));
 }
 
 static void print_usage() {
