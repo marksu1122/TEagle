@@ -87,7 +87,7 @@ static pthread_mutex_t refseq_lock;
 // Teagle 
 FILE *readlist;
 // output file name
-static char *readlist_name = "BUG";
+static char *readlist_name = "../../data/Find";
 
 static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length,int *hypo_pos){
 
@@ -125,7 +125,7 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
     char *hypo = malloc((2*hypo_length + var_alt_length+1) * sizeof (*refseq));
     int start = pos - hypo_length;
     int start_hypo,end_hypo;
-    *hypo_pos = start;
+    *hypo_pos = start+1;
 
     if (start < 1){
         *hypo_pos = 1;
@@ -137,23 +137,23 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
         hypo[pos-1+var_alt_length+hypo_length] = '\0';
 
     }else if (pos + var_ref_length > refseq_length){
-        memcpy(hypo, refseq+start-1, hypo_length* sizeof (*refseq));        
+        memcpy(hypo, refseq+start, hypo_length* sizeof (*refseq));        
         start_hypo = hypo_length;
         memcpy(hypo+hypo_length, var_alt, var_alt_length * sizeof (*refseq));
         end_hypo = hypo_length + var_alt_length;
         int remain =refseq_length - pos - var_ref_length +1;
         if(remain > 0){
-            memcpy(hypo+hypo_length+var_alt_length, refseq+pos+var_ref_length-1,remain * sizeof (*refseq));
+            memcpy(hypo+hypo_length+var_alt_length, refseq+pos+var_ref_length,remain * sizeof (*refseq));
             hypo[hypo_length+var_alt_length+remain] = '\0';
         }else{
             hypo[hypo_length+var_alt_length] = '\0';
         }
     }else{
-        memcpy(hypo, refseq+start-1, hypo_length * sizeof (*refseq));
+        memcpy(hypo, refseq+start, hypo_length * sizeof (*refseq));
         start_hypo = hypo_length;
         memcpy(hypo+hypo_length, var_alt, var_alt_length * sizeof (*refseq));
         end_hypo = hypo_length + var_alt_length;
-        memcpy(hypo+hypo_length+var_alt_length, refseq+pos+var_ref_length-1, hypo_length * sizeof (*refseq));
+        memcpy(hypo+hypo_length+var_alt_length, refseq+pos+var_ref_length, hypo_length * sizeof (*refseq));
         hypo[2*hypo_length+var_alt_length] = '\0';
     }
     region_t *hypo_seq = region_create(hypo, start_hypo, end_hypo);//start_ =qb,end_hypo = rb
@@ -388,15 +388,10 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
         ar = mem_align1(opt, idx->bwt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr); // get all the hits
         int start = hyposeq->pos1;
         int end = hyposeq->pos2;
+        //[start,end) index start from 0 
         for (int j = 0; j < ar.n; ++j) { // traverse each hit
-            int qb,qlen= ar.a[j].qe - ar.a[j].qb;
             if(start >= ar.a[j].qe ||end <= ar.a[j].qb){ //NOT cover hypo_part
                 continue;
-            }else if(ar.a[j].qb >= start){
-                //反推qb
-                qb = ar.a[j].qe - (strlen(var_data[i]->alt) - strlen(var_data[i]->ref)) - strlen(hyposeq->chr);
-            }else{
-                qb = ar.a[j].qb;
             }
             mem_aln_t a;
             if (ar.a[j].secondary >= 0) { //TODO??
@@ -407,20 +402,29 @@ static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_lis
 
             char *name = strdup(idx->bns->anns[a.rid].name);
             //TODO overflow??
-            ar.a[j].qe = ar.a[j].re - ar.a[j].rb;
-            ar.a[j].qb = ar.a[j].rb % hypo_length;
-            ar.a[j].qe += ar.a[j].qb;
-            ar.a[j].rb = *hypo_pos + qb - 1;
-            ar.a[j].re = ar.a[j].rb + qlen;
+            int rb = ar.a[j].rb;
+            int r_len = ar.a[j].re - ar.a[j].rb;
+            int q_len = ar.a[j].qe - ar.a[j].qb;
+            if(ar.a[j].qb >= start){//TODO DEL 
+                ar.a[j].re = *hypo_pos-1 + ar.a[j].qe - (strlen(var_data[i]->alt) - strlen(var_data[i]->ref));
+                ar.a[j].rb = ar.a[j].re - q_len;
+            }else{
+                ar.a[j].rb = *hypo_pos- 1 + ar.a[j].qb ;
+                ar.a[j].re = ar.a[j].rb + q_len;
+            }
+
+            ar.a[j].qb = rb% hypo_length;
+            ar.a[j].qe = ar.a[j].qb+r_len;
+            
             if(check(name, read_list)){
+                fprintf(readlist, "****************************************************\n");
                 fprintf(readlist, "%d\t%s\t%s\t", var_data[i]->pos, var_data[i]->ref, var_data[i]->alt);
                 for (int z = 0; z < FA_readlist->len; z++){
                     if(!strcmp(name , FAread_data[z]->name)){
                         mem_aln_t b;
                         b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, FAread_data[z]->l_seq, FAread_data[z]->seq, &ar.a[j]);
-                        fprintf(readlist, "%s\t%d\t%s\n",name,b.pos,FAread_data[z]->seq);
                         read_t *hypoRead = gethypoRead(FAread_data[z],ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
-                        fprintf(readlist, "%s\t%d\t%s\n",hypoRead->name,hypoRead->pos, hypoRead->qseq);
+                        fprintf(readlist, "%s\t%d\t%d\t%s\t\n",hypoRead->name,hypoRead->pos,hypoRead->is_reverse, hypoRead->qseq);
                         vector_add(read_list, hypoRead);
                         break;
                     }
@@ -857,6 +861,10 @@ static char *evaluate(vector_t *var_set) {
     // index_argv[0] = "index";
     // index_argv[1] = FAname;
     // int ret = bwa_index(2, index_argv); //BUG
+
+    // char *cmd = "./bwa/bwa index ";
+    // strcat(cmd, FAname);
+    // system(cmd);
 
     // fprintf(readlist, "FAname: %s\n", FAname);
     bwaidx_t *idx;
