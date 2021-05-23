@@ -50,6 +50,7 @@ static int debug;
 static char *vcf_file;
 static char *bam_file;
 static char *fa_file;
+static char *fq_file;
 static char *out_file;
 static int nthread;
 static int sharedr;
@@ -183,8 +184,7 @@ static vector_t * get_Read(const char *fq_file,int *hypo_length){
         return 1;
     }
     ks = kseq_init(fp); // initialize the FASTA/Q parser
-    char *fa_name;
-    fa_name = get_FAname(fq_file);
+    char *fa_name = get_FAname(fq_file);
     read_FA = fopen(fa_name, "w");
 
     vector_t *FA_readlist = vector_create(64, BSEQ_T);
@@ -375,8 +375,7 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
     return hyporead;
 }
 
-static vector_t *Gradu(vector_t * FA_readlist, bwaidx_t *idx,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
-    bwaidx_t *ref_idx = bwa_idx_load("../../data/ref/biglong.fa", BWA_IDX_ALL); // load the BWA index
+static vector_t *Gradu(vector_t * FA_readlist,bwaidx_t *ref_idx, bwaidx_t *idx,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
     bseq1_t **FAread_data = (bseq1_t **)FA_readlist->data;
     for (int i = 0; i < varset_len; i++){
         //Construct alt seq;
@@ -833,7 +832,7 @@ static void calc_likelihood(stats_t *stat, vector_t *var_set, const char *refseq
     }
 }
 
-static char *evaluate(vector_t *var_set) {
+static char *evaluate(vector_t *var_set,bwaidx_t *ref_idx,vector_t *FA_readlist,int hypo_length) {
     size_t i, readi, seti;
 
     variant_t **var_data = (variant_t **)var_set->data;
@@ -852,28 +851,21 @@ static char *evaluate(vector_t *var_set) {
     }
 
     // Teagle
-    int hypo_length;
-    vector_t *new_read_list;
-    char *FAname = "../../data/read/BS_read.fasta";
-    vector_t *FA_readlist = get_Read("../../data/read/BS_read.fastq",&hypo_length);
+    char *FAname = get_FAname(fq_file);
+    bwaidx_t *idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
     // TODO index
     // char *index_argv[2];
     // index_argv[0] = "index";
     // index_argv[1] = FAname;
     // int ret = bwa_index(2, index_argv); //BUG
-
+    
     // char *cmd = "./bwa/bwa index ";
     // strcat(cmd, FAname);
     // system(cmd);
-
-    // fprintf(readlist, "FAname: %s\n", FAname);
-    bwaidx_t *idx;
-    idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
-
     
-
+    
     int before = read_list->len;
-    read_list = Gradu(FA_readlist, idx, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
+    read_list = Gradu(FA_readlist,ref_idx, idx, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
     if(before  < read_list->len){
         fprintf(readlist,"[");
         for (int k = 0; k < var_set->len; k++) { 
@@ -1060,13 +1052,16 @@ static void *pool(void *work) {
     work_t *w = (work_t *)work;
 
     size_t n = w->len / 10;
+    bwaidx_t *ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
+    int hypo_length;
+    vector_t *FA_readlist = get_Read(fq_file, &hypo_length);
     while (1) { //pthread_t ptid = pthread_self(); uint64_t threadid = 0; memcpy(&threadid, &ptid, min(sizeof (threadid), sizeof (ptid)));
         pthread_mutex_lock(&w->q_lock);
         vector_t *var_set = (vector_t *)vector_pop(w->queue);
         pthread_mutex_unlock(&w->q_lock);
         if (var_set == NULL) break;
         
-        char *outstr = evaluate(var_set);
+        char *outstr = evaluate(var_set,ref_idx,FA_readlist,hypo_length);
         if (outstr != NULL) {
             pthread_mutex_lock(&w->r_lock);
             if (!verbose && n > 10 && w->results->len > 10 && w->results->len % n == 0) {
@@ -1305,6 +1300,7 @@ int main(int argc, char **argv) {
     vcf_file = NULL;
     bam_file = NULL;
     fa_file = NULL;
+    fq_file = NULL;
     out_file = NULL;
     nthread = 1;
     sharedr = 0;
@@ -1333,6 +1329,7 @@ int main(int argc, char **argv) {
         {"vcf", required_argument, NULL, 'v'},
         {"bam", required_argument, NULL, 'a'},
         {"ref", required_argument, NULL, 'r'},
+        {"read", required_argument, NULL, 'f'},
         {"out", optional_argument, NULL, 'o'},
         {"nthread", optional_argument, NULL, 't'},
         {"sharedr", optional_argument, NULL, 's'},
@@ -1361,7 +1358,7 @@ int main(int argc, char **argv) {
     };
 
     int opt = 0;
-    while ((opt = getopt_long(argc, argv, "d:v:a:r:o:t:s:n:w:m:", long_options, &opt)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:v:a:r:f:o:t:s:n:w:m:", long_options, &opt)) != -1) {
         switch (opt) {
             case 0: 
                 //if (long_options[option_index].flag != 0) break;
@@ -1370,6 +1367,7 @@ int main(int argc, char **argv) {
             case 'v': vcf_file = optarg; break;
             case 'a': bam_file = optarg; break;
             case 'r': fa_file= optarg; break;
+            case 'f': fq_file= optarg; break;
             case 'o': out_file = optarg; break;
             case 't': nthread = parse_int(optarg); break;
             case 's': sharedr = parse_int(optarg); break;
@@ -1398,6 +1396,7 @@ int main(int argc, char **argv) {
     }
     if (bam_file == NULL) { exit_usage("Missing alignments given as BAM file!"); } 
     if (fa_file == NULL) { exit_usage("Missing reference genome given as Fasta file!"); }
+    if (fq_file == NULL) { exit_usage("Missing read given as Fastq file!"); }
     if (nthread < 1) nthread = 1;
     if (sharedr < 0 || sharedr > 2) sharedr = 0;
     if (distlim < 0) distlim = 10;
