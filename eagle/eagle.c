@@ -80,12 +80,13 @@ static struct tm *time_info;
 
 KHASH_MAP_INIT_STR(rsh, fasta_t *)   // hashmap: string key, vector value
 static khash_t(rsh) *refseq_hash; // pointer to hashmap
-static pthread_mutex_t refseq_lock; 
+static pthread_mutex_t refseq_lock;
 
-
-
-
-// Teagle 
+static bwaidx_t *ref_idx;
+static bwaidx_t *read_idx;
+static vector_t *FA_readlist;
+int hypo_length;
+// Teagle
 FILE *readlist;
 // output file name
 static char *readlist_name = "../../data/Find";
@@ -121,8 +122,7 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
     size_t var_alt_length = strlen(var_alt);
     size_t var_ref_length = strlen(var_ref);
 
-    //TODO if hypolength > read ???  or 
-    //TODO DELetion
+    //TODO if hypolength > read ???  or AND check
     char *hypo = malloc((2*hypo_length + var_alt_length+1) * sizeof (*refseq));
     int start = pos - hypo_length;
     int start_hypo,end_hypo;
@@ -157,6 +157,7 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
         memcpy(hypo+hypo_length+var_alt_length, refseq+pos+var_ref_length, hypo_length * sizeof (*refseq));
         hypo[2*hypo_length+var_alt_length] = '\0';
     }
+
     region_t *hypo_seq = region_create(hypo, start_hypo, end_hypo);//start_ =qb,end_hypo = rb
     return hypo_seq;
 }
@@ -173,7 +174,7 @@ char *get_FAname(char *fileName) {
     return FAname;
 }
 
-static vector_t * get_Read(const char *fq_file,int *hypo_length){
+static vector_t * get_Read(const char *fq_file){
     gzFile fp;
     kseq_t *ks;
     FILE *read_FA;
@@ -187,13 +188,13 @@ static vector_t * get_Read(const char *fq_file,int *hypo_length){
     char *fa_name = get_FAname(fq_file);
     read_FA = fopen(fa_name, "w");
 
-    vector_t *FA_readlist = vector_create(64, BSEQ_T);
+    FA_readlist = vector_create(64, BSEQ_T);
 
     while (kseq_read(ks) >= 0){ // read one sequence
         fprintf(read_FA, ">%s\n", ks->name.s);
         fprintf(read_FA, "%s\n", ks->seq.s);
 
-        *hypo_length = ks->seq.l;
+        hypo_length = ks->seq.l;
         bseq1_t *read = malloc(sizeof(bseq1_t));
         read->name = strdup(ks->name.s);
         read->seq = strdup(ks->seq.s);
@@ -225,6 +226,9 @@ static char* strrev(char *str){
 
 static int check(char *name,vector_t * read_list){
     //TODO reverse
+    if(!read_list){
+        return 1;
+    }
     read_t **read = (read_t **)read_list->data;
     for (int i = 0; i < read_list->len;i++){
         if(!strcmp(name , read[i]->name)){
@@ -375,16 +379,18 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
     return hyporead;
 }
 
-static vector_t *Gradu(vector_t * FA_readlist,bwaidx_t *ref_idx, bwaidx_t *idx,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
+static vector_t *Gradu(vector_t * FA_readlist,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
     bseq1_t **FAread_data = (bseq1_t **)FA_readlist->data;
     for (int i = 0; i < varset_len; i++){
         //Construct alt seq;
+        //TODO int overflow
         int *hypo_pos = malloc(sizeof(int));
         region_t *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length,hypo_pos);
+        fprintf(readlist, "hypo:\t%d\t%s\t%s\t%d\t%s\t%d\t%d\t\n",var_data[i]->pos,var_data[i]->ref,var_data[i]->alt,*hypo_pos,hyposeq->chr,hyposeq->pos1,hyposeq->pos2);
         mem_alnreg_v ar;
         mem_opt_t *opt;
         opt = mem_opt_init(); 
-        ar = mem_align1(opt, idx->bwt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr); // get all the hits
+        ar = mem_align1(opt, read_idx->bwt, read_idx->bns, read_idx->pac, strlen(hyposeq->chr), hyposeq->chr); // get all the hits
         int start = hyposeq->pos1;
         int end = hyposeq->pos2;
         //[start,end) index start from 0 
@@ -397,9 +403,9 @@ static vector_t *Gradu(vector_t * FA_readlist,bwaidx_t *ref_idx, bwaidx_t *idx,v
                 continue; // skip secondary alignments
             }
             //TODO need? or get pos to get rid and ten get name
-            a = mem_reg2aln(opt, idx->bns, idx->pac, strlen(hyposeq->chr), hyposeq->chr, &ar.a[j]); // get forward-strand position and CIGAR
+            a = mem_reg2aln(opt, read_idx->bns, read_idx->pac, strlen(hyposeq->chr), hyposeq->chr, &ar.a[j]); // get forward-strand position and CIGAR
 
-            char *name = strdup(idx->bns->anns[a.rid].name);
+            char *name = strdup(read_idx->bns->anns[a.rid].name);
             //TODO overflow??
             int rb = ar.a[j].rb;
             int r_len = ar.a[j].re - ar.a[j].rb;
@@ -434,54 +440,58 @@ static vector_t *Gradu(vector_t * FA_readlist,bwaidx_t *ref_idx, bwaidx_t *idx,v
         free(opt);
 
     }
-
-    bwa_idx_destroy(idx);
     return read_list;
 }
 
 // sepearte snp and another
-static vector_t *vcf_read(FILE *file) {
-    print_status("# start vcf_read:\t%s", asctime(time_info));
-    vector_t *var_list = vector_create(8, VARIANT_T);
+static vector_t *vcf_read(FILE *file) {	
+     print_status("# start vcf_read:\t%s", asctime(time_info));
+    vector_t *var_list = vector_create(8, VARIANT_T);	
+    char *line = NULL;	
+    ssize_t read_file = 0;	
+    size_t line_length = 0;	
 
-    char *line = NULL;
-    char *prev = "";
-    ssize_t read_file = 0;
-    size_t line_length = 0;
-    while ((read_file = getline(&line, &line_length, file)) != -1) {
-        if (line_length <= 0 || line[strspn(line, " \t\v\r\n")] == '\0') continue; // blank line
-        if (line[0] == '#') continue;
+    int prev_pos = 0;
+    char *prev_chr = NULL;
+    char *prev_ref = NULL;
+    char *prev_alt = NULL;
 
-        if(!strcmp(line,prev)){//same
+    while ((read_file = getline(&line, &line_length, file)) != -1) {	
+        if (line_length <= 0 || line[strspn(line, " \t\v\r\n")] == '\0') continue; // blank line	
+        if (line[0] == '#') continue;	
+        int pos;	
+        char chr[line_length], ref[line_length], alt[line_length];	
+        int t = sscanf(line, "%s %d %*[^\t] %s %s", chr, &pos, ref, alt);	
+        if (t < 4 || has_numbers(ref) || has_numbers(alt)) { exit_err("bad fields in VCF file\n%s\n", line); }	
+        if(prev_pos == pos && !strcmp(chr, prev_chr) && !strcmp(ref, prev_ref) && !strcmp(alt, prev_alt)){
             continue;
         }else{
-            prev = strdup(line);
+            prev_pos = pos;
+            prev_chr = strdup(chr);
+            prev_ref = strdup(ref);
+            prev_alt = strdup(alt);
         }
-        int pos;
-        char chr[line_length], ref[line_length], alt[line_length];
-        int t = sscanf(line, "%s %d %*[^\t] %s %s", chr, &pos, ref, alt);
-        if (t < 4 || has_numbers(ref) || has_numbers(alt)) { exit_err("bad fields in VCF file\n%s\n", line); }
-
-        int n1, n2;
-        char *s1, *s2, ref_token[strlen(ref) + 1], alt_token[strlen(alt) + 1];
-        // add snp vcf to vector 
-        for (s1 = ref; sscanf(s1, "%[^, ]%n", ref_token, &n1) == 1 || sscanf(s1, "%[-]%n", ref_token, &n1) == 1; s1 += n1 + 1) { // heterogenenous non-reference (comma-delimited) as separate entries
-            for (s2 = alt; sscanf(s2, "%[^, ]%n", alt_token, &n2) == 1 || sscanf(s2, "%[-]%n", alt_token, &n2) == 1; s2 += n2 + 1) {
-                if (alt_token[0] != '.' && alt_token[0] != '*' && strcmp("<*:DEL>", alt_token) != 0) {
-                    variant_t *v = variant_create(chr, pos, ref_token, alt_token);
-                    vector_add(var_list, v);
-                }
-                if (*(s2 + n2) != ',') break;
-            }
-            if (*(s1 + n1) != ',') break;
-        }
-    }
-    free(line); line = NULL;
-    free(prev); prev = NULL;
-    fclose(file);
-    qsort(var_list->data, var_list->len, sizeof (void *), nat_sort_variant);
+        int n1, n2;	
+        char *s1, *s2, ref_token[strlen(ref) + 1], alt_token[strlen(alt) + 1];	
+        for (s1 = ref; sscanf(s1, "%[^, ]%n", ref_token, &n1) == 1 || sscanf(s1, "%[-]%n", ref_token, &n1) == 1; s1 += n1 + 1) { // heterogenenous non-reference (comma-delimited) as separate entries	
+            for (s2 = alt; sscanf(s2, "%[^, ]%n", alt_token, &n2) == 1 || sscanf(s2, "%[-]%n", alt_token, &n2) == 1; s2 += n2 + 1) {	
+                if (alt_token[0] != '.' && alt_token[0] != '*' && strcmp("<*:DEL>", alt_token) != 0) {	
+                    variant_t *v = variant_create(chr, pos, ref_token, alt_token);	
+                    vector_add(var_list, v);	
+                }	
+                if (*(s2 + n2) != ',') break;	
+            }	
+            if (*(s1 + n1) != ',') break;	
+        }	
+    }	
+    free(line); line = NULL;	
+    free(prev_chr); prev_chr = NULL;
+    free(prev_ref); prev_ref = NULL;
+    free(prev_alt); prev_alt = NULL;
+    fclose(file);	
+    qsort(var_list->data, var_list->len, sizeof (void *), nat_sort_variant);	
     print_status("# end vcf_read:\t%s", asctime(time_info));
-    return var_list;
+    return var_list;	
 }
 
 static int bam_fetch_last(const char *bam_file, const char *chr, const int pos1, const int pos2) {
@@ -832,7 +842,7 @@ static void calc_likelihood(stats_t *stat, vector_t *var_set, const char *refseq
     }
 }
 
-static char *evaluate(vector_t *var_set,bwaidx_t *ref_idx,vector_t *FA_readlist,int hypo_length) {
+static char *evaluate(vector_t *var_set,vector_t *FA_readlist,int hypo_length) {
     size_t i, readi, seti;
 
     variant_t **var_data = (variant_t **)var_set->data;
@@ -849,10 +859,8 @@ static char *evaluate(vector_t *var_set,bwaidx_t *ref_idx,vector_t *FA_readlist,
         vector_destroy(read_list); free(read_list); read_list = NULL;
         return NULL;
     }
-
     // Teagle
-    char *FAname = get_FAname(fq_file);
-    bwaidx_t *idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
+
     // TODO index
     // char *index_argv[2];
     // index_argv[0] = "index";
@@ -862,10 +870,13 @@ static char *evaluate(vector_t *var_set,bwaidx_t *ref_idx,vector_t *FA_readlist,
     // char *cmd = "./bwa/bwa index ";
     // strcat(cmd, FAname);
     // system(cmd);
-    
-    
-    int before = read_list->len;
-    read_list = Gradu(FA_readlist,ref_idx, idx, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
+
+   
+    int before = 0;
+    if(!read_list){
+        before = read_list->len;
+    }
+    read_list = Gradu(FA_readlist, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
     if(before  < read_list->len){
         fprintf(readlist,"[");
         for (int k = 0; k < var_set->len; k++) { 
@@ -1052,16 +1063,16 @@ static void *pool(void *work) {
     work_t *w = (work_t *)work;
 
     size_t n = w->len / 10;
-    bwaidx_t *ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
     int hypo_length;
-    vector_t *FA_readlist = get_Read(fq_file, &hypo_length);
+
+    print_status("# Start evaluate %s", asctime(time_info));
     while (1) { //pthread_t ptid = pthread_self(); uint64_t threadid = 0; memcpy(&threadid, &ptid, min(sizeof (threadid), sizeof (ptid)));
         pthread_mutex_lock(&w->q_lock);
         vector_t *var_set = (vector_t *)vector_pop(w->queue);
         pthread_mutex_unlock(&w->q_lock);
         if (var_set == NULL) break;
         
-        char *outstr = evaluate(var_set,ref_idx,FA_readlist,hypo_length);
+        char *outstr = evaluate(var_set,FA_readlist,hypo_length);
         if (outstr != NULL) {
             pthread_mutex_lock(&w->r_lock);
             if (!verbose && n > 10 && w->results->len > 10 && w->results->len % n == 0) {
@@ -1079,7 +1090,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
     size_t i, j;
 
     variant_t **var_data = (variant_t **)var_list->data;
-
+    
     i = 0;
     vector_t *var_set = vector_create(var_list->len, VOID_T);
     if (sharedr == 1) { /* Variants that share a read: shared with a given first variant */
@@ -1118,39 +1129,46 @@ static void process(const vector_t *var_list, FILE *out_fh) {
         }
     }
     else { /* Variants that are close together as sets */
+        //TODO maybe seperate indel and snp
         while (i < var_list->len) {
             vector_t *curr = vector_create(8, VARIANT_T);
             vector_add(curr, var_data[i]);
             j = i + 1;
-            int combination = 1,repeat =0;
             while (distlim > 0 && j < var_list->len && strcmp(var_data[j]->chr, var_data[j - 1]->chr) == 0 && abs(var_data[j]->pos - var_data[j - 1]->pos) <= distlim) {
                 if (maxdist > 0 && abs(var_data[j]->pos - var_data[i]->pos) > maxdist) break;
-                //TODO maybe seperate indel and snp
-                if(var_data[j-1]->pos == var_data[j]->pos && (strlen(var_data[j]->ref) != strlen(var_data[j]->alt))){
-                    vector_t *indel = vector_create(8, VARIANT_T);
-                    vector_add(indel, var_data[j++]);
-                    vector_add(var_set, indel);
-                }else{
-                    vector_add(curr, var_data[j++]);
-                }
+                vector_add(curr, var_data[j++]);
             }
             i = j;
             vector_add(var_set, curr);
         }
+        // while (i < var_list->len) {
+        //     vector_t *curr = vector_create(8, VARIANT_T);
+        //     vector_add(curr, var_data[i]);
+        //     j = i + 1;
+        //     int combination = 1,repeat =0;
+        //     while (distlim > 0 && j < var_list->len && strcmp(var_data[j]->chr, var_data[j - 1]->chr) == 0 && abs(var_data[j]->pos - var_data[j - 1]->pos) <= distlim) {
+        //         if (maxdist > 0 && abs(var_data[j]->pos - var_data[i]->pos) > maxdist) break;
+        //         //TODO maybe seperate indel and snp
+        //         if(var_data[j-1]->pos == var_data[j]->pos && (strlen(var_data[j]->ref) != strlen(var_data[j]->alt))){
+        //             vector_t *indel = vector_create(8, VARIANT_T);
+        //             vector_add(indel, var_data[j++]);
+        //             vector_add(var_set, indel);
+        //         }else{
+        //             vector_add(curr, var_data[j++]);
+        //         }
+        //     }
+        //     i = j;
+        //     vector_add(var_set, curr);
+        // }
     }
+   
+    print_status("# start flag_add:\t%s", asctime(time_info));
     /* Heterozygous non-reference variants as separate entries */
-    int stop = var_set->len;
     int flag_add = 1;
     while (flag_add) {
         flag_add = 0;
         int x=0,y =0;
         for (i = 0; i < var_set->len; i++) {
-            // if(x > 0){
-            //     y += x;
-            //     print_status("# combinations: %d\ttotal: %d\t%s", x, y,asctime(time_info));
-            //     print_status("===============================\n");
-            //     x = 0;
-            // }
             vector_t *curr_set = (vector_t *)var_set->data[i];
             if (curr_set->len == 1) continue;
             int flag_nonset = 1;
@@ -1179,14 +1197,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                         vector_add(dup, next);
                         vector_del(curr_set, j + 1);
                     }else{
-                        // if(dup->len > 0){
-                        //     print_status("# duplicates in [%d] : %d\t%s", curr->pos , dup->len+1,asctime(time_info));
-                        //     if(x == 0){
-                        //         x += 1;
-                        //     }else{
-                        //         x = x * (dup->len + 1);
-                        //     }
-                        // }
                         while (dup->len > 0) {
                             variant_t *add = (variant_t *)vector_pop(dup);
                             // vector_t *new = vector_dup(curr_set);
@@ -1200,14 +1210,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
                     }
 
                 }
-                // if(dup->len > 0){
-                //     print_status("# duplicates in [%d] : %d \t%s", ((variant_t *)curr_set->data[(curr_set->len-1)])->pos , dup->len+1 ,asctime(time_info));
-                //     if(x == 0){
-                //         x += 1;
-                //     }else{
-                //         x = x * (dup->len + 1);
-                //     }
-                // }
                 while (dup->len > 0) {
                     int k = curr_set->len - 1;
                     variant_t *add = (variant_t *)vector_pop(dup);
@@ -1222,6 +1224,16 @@ static void process(const vector_t *var_list, FILE *out_fh) {
         }
         
     }
+    // for (i = 0; i < var_set->len; i++) {
+    //     vector_t *curr_set = (vector_t *)var_set->data[i];
+    //     for (j = 0; j < curr_set->len; j++) {
+    //         variant_t *curr = (variant_t *)curr_set->data[j];
+    //         print_status("#%d\t %d\t%s\t%s\n",j,curr->pos,curr->ref,curr->alt);
+    //         print_status("****************************************\n");
+    //     }
+    //     print_status("#%d=============================================\n",i);
+    // }
+    // print_status("# end flag_add:\t%s", asctime(time_info));
 
     if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
@@ -1246,6 +1258,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
     pthread_mutex_init(&w->r_lock, NULL);
 
     pthread_t tid[nthread];
+    print_status("# Start pool %s", asctime(time_info));
     for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
     for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
     pthread_mutex_destroy(&w->q_lock);
@@ -1424,6 +1437,11 @@ int main(int argc, char **argv) {
     
     /* Teagle */
     readlist = fopen(readlist_name, "w");
+    ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
+    char *FAname = get_FAname(fq_file);
+    print_status("# FAnames: %s \t %s", FAname, asctime(time_info));
+    read_idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
+    FA_readlist = get_Read(fq_file);
 
     init_seqnt_map(seqnt_map);
     init_q2p_table(p_match, p_mismatch, 50);
@@ -1444,6 +1462,9 @@ int main(int argc, char **argv) {
     /* Teagle */
     fclose(readlist);
 
+    bwa_idx_destroy(ref_idx);
+    bwa_idx_destroy(read_idx);
+    
     pthread_mutex_destroy(&refseq_lock);
 
     khiter_t k;
