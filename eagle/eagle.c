@@ -88,8 +88,10 @@ static vector_t *FA_readlist;
 int hypo_length;
 // Teagle
 FILE *readlist;
+FILE *pileup;
 // output file name
-static char *readlist_name = "../../data/Find";
+static char *readlist_name = "../../data/exp/Find";
+static char *pileup_name = "../../data/exp/pileup";
 
 static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length,int *hypo_pos){
 
@@ -407,7 +409,7 @@ static vector_t *Gradu(vector_t * FA_readlist,vector_t * read_list,const char *r
 
             char *name = strdup(read_idx->bns->anns[a.rid].name);
             //TODO overflow??
-            int rb = ar.a[j].rb;
+            long long rb = ar.a[j].rb;
             int r_len = ar.a[j].re - ar.a[j].rb;
             int q_len = ar.a[j].qe - ar.a[j].qb;
             if(ar.a[j].qb >= start){//TODO DEL 
@@ -423,13 +425,16 @@ static vector_t *Gradu(vector_t * FA_readlist,vector_t * read_list,const char *r
             
             if(check(name, read_list)){
                 fprintf(readlist, "****************************************************\n");
+                fprintf(pileup, "****************************************************\n");
                 fprintf(readlist, "%d\t%s\t%s\t", var_data[i]->pos, var_data[i]->ref, var_data[i]->alt);
+                fprintf(pileup, "%d\t%s\t%s\t", var_data[i]->pos, var_data[i]->ref, var_data[i]->alt);
                 for (int z = 0; z < FA_readlist->len; z++){
                     if(!strcmp(name , FAread_data[z]->name)){
                         mem_aln_t b;
                         b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, FAread_data[z]->l_seq, FAread_data[z]->seq, &ar.a[j]);
                         read_t *hypoRead = gethypoRead(FAread_data[z],ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
                         fprintf(readlist, "%s\t%d\t%d\t%s\t\n",hypoRead->name,hypoRead->pos,hypoRead->is_reverse, hypoRead->qseq);
+                        fprintf(pileup, "%s\t%d\t%d\t%s\t\n",hypoRead->name,hypoRead->pos,hypoRead->is_reverse, hypoRead->qseq);
                         vector_add(read_list, hypoRead);
                         break;
                     }
@@ -563,7 +568,6 @@ static fasta_t *refseq_fetch(char *name, const char *fa_file) {
         if (errno == 0) { fai = fai_load(fa_file); }
         else { exit_err("failed to build and open FA index %s\n", fa_file); }
     }
-   
     if (!faidx_has_seq(fai, name)) { exit_err("failed to find %s in reference %s\n", name, fa_file); }
 
     fasta_t *f = fasta_create(name);
@@ -842,7 +846,7 @@ static void calc_likelihood(stats_t *stat, vector_t *var_set, const char *refseq
     }
 }
 
-static char *evaluate(vector_t *var_set,vector_t *FA_readlist,int hypo_length) {
+static char *evaluate(vector_t *var_set) {
     size_t i, readi, seti;
 
     variant_t **var_data = (variant_t **)var_set->data;
@@ -870,23 +874,34 @@ static char *evaluate(vector_t *var_set,vector_t *FA_readlist,int hypo_length) {
     // char *cmd = "./bwa/bwa index ";
     // strcat(cmd, FAname);
     // system(cmd);
-
-   
-    int before = 0;
-    if(!read_list){
-        before = read_list->len;
-    }
-    read_list = Gradu(FA_readlist, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
-    if(before  < read_list->len){
-        fprintf(readlist,"[");
+    clock_t a = clock();
+    if (fq_file != NULL && read_list != NULL){
+        
+        int before = read_list->len;
+        print_status("# 1\n");
+        fprintf(pileup, "======================================\n");
+        print_status("# 2\n");
+        fprintf(pileup,"[");
         for (int k = 0; k < var_set->len; k++) { 
-            fprintf(readlist, "%s,%d,%s,%s;", var_data[k]->chr, var_data[k]->pos, var_data[k]->ref, var_data[k]->alt);
+            fprintf(pileup, "%s,%d,%s,%s;", var_data[k]->chr, var_data[k]->pos, var_data[k]->ref, var_data[k]->alt);
         }
-        fprintf(readlist,"]\n");
-        fprintf(readlist, "==========================================\n");
+        fprintf(pileup,"]\n");
+        read_t **read = (read_t **)read_list->data;
+        for (int k = 0; k < read_list->len;k++){
+            fprintf(pileup, "%d\t%s\t\n", read[k]->pos, read[k]->qseq);
+        }
+        read_list = Gradu(FA_readlist, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
+        if(before  < read_list->len){
+            fprintf(readlist,"[");
+            for (int k = 0; k < var_set->len; k++) { 
+                fprintf(readlist, "%s,%d,%s,%s;", var_data[k]->chr, var_data[k]->pos, var_data[k]->ref, var_data[k]->alt);
+            }
+            fprintf(readlist,"]\n");
+            fprintf(readlist, "==========================================\n");
+        }
+        print_status("# Done Gradu (hr):\t%f\n", (double)( clock() - a) / CLOCKS_PER_SEC / 3600);
     }
     
-
     read_t **read_data = (read_t **)read_list->data;
 
     /* Variant combinations as a vector of vectors */
@@ -900,12 +915,14 @@ static char *evaluate(vector_t *var_set,vector_t *FA_readlist,int hypo_length) {
     }
     */
     vector_t *stats = vector_create(var_set->len + 1, STATS_T);
-
+    a = clock();
     for (seti = 0; seti < combo->len; seti++) { // all, singles
         stats_t *s = stats_create((vector_int_t *)combo->data[seti], read_list->len);
         calc_likelihood(s, var_set, refseq, refseq_length, read_data, read_list->len, seti, seqnt_map);
         vector_add(stats, s);
     }
+    print_status("# Done  all, singles (hr):\t%f\n", (double)( clock() - a) / CLOCKS_PER_SEC / 3600);
+    a = clock();
     if (var_set->len > 1) { // doubles and beyond
         heap_t *h = heap_create(STATS_T);
         for (seti = 1; seti < combo->len; seti++) heap_push(h, ((stats_t *)stats->data[seti])->mut, stats->data[seti]);
@@ -927,9 +944,9 @@ static char *evaluate(vector_t *var_set,vector_t *FA_readlist,int hypo_length) {
         heap_free(h);
     }
     vector_free(combo); //combos in stat so don't destroy
-
+    print_status("# Done  doubles and beyond (hr):\t%f\n", (double)( clock() - a) / CLOCKS_PER_SEC / 3600);
     stats_t **stat = (stats_t **)stats->data;
-
+    a = clock();
     /* Heterozygous non-reference haplotypes as mixture model hypotheses */
     int c[stats->len];
     memset(c, 0, sizeof (c));
@@ -971,7 +988,7 @@ static char *evaluate(vector_t *var_set,vector_t *FA_readlist,int hypo_length) {
         total = log_add_exp(total, stat[seti]->ref);
     }
     for (seti = 0; seti < combo->len; seti++) total = log_add_exp(total, prhap->data[seti]);
-
+    print_status("# Done  Heterozygous non-reference haplotypes (hr):\t%f\n", (double)( clock() - a) / CLOCKS_PER_SEC / 3600);
     char *output = malloc(sizeof (*output));
     output[0] = '\0';
     if (mvh) { /* Max likelihood variant hypothesis */
@@ -1063,16 +1080,14 @@ static void *pool(void *work) {
     work_t *w = (work_t *)work;
 
     size_t n = w->len / 10;
-    int hypo_length;
-
-    print_status("# Start evaluate %s", asctime(time_info));
     while (1) { //pthread_t ptid = pthread_self(); uint64_t threadid = 0; memcpy(&threadid, &ptid, min(sizeof (threadid), sizeof (ptid)));
         pthread_mutex_lock(&w->q_lock);
         vector_t *var_set = (vector_t *)vector_pop(w->queue);
         pthread_mutex_unlock(&w->q_lock);
         if (var_set == NULL) break;
-        
-        char *outstr = evaluate(var_set,FA_readlist,hypo_length);
+        print_status("# start evaluate: %zd / %zd\t%s", w->results->len, w->queue->len, asctime(time_info));
+        char *outstr = evaluate(var_set);
+        print_status("# end evaluate: %zd / %zd\t%s", w->results->len, w->queue->len, asctime(time_info));
         if (outstr != NULL) {
             pthread_mutex_lock(&w->r_lock);
             if (!verbose && n > 10 && w->results->len > 10 && w->results->len % n == 0) {
@@ -1233,7 +1248,7 @@ static void process(const vector_t *var_list, FILE *out_fh) {
     //     }
     //     print_status("#%d=============================================\n",i);
     // }
-    // print_status("# end flag_add:\t%s", asctime(time_info));
+    print_status("# end flag_add:\t%s", asctime(time_info));
 
     if (sharedr == 1) { print_status("# Variants with shared reads to first in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
     else if (sharedr == 2) { print_status("# Variants with shared reads to any in set: %i entries\t%s", (int)var_set->len, asctime(time_info)); }
@@ -1258,7 +1273,6 @@ static void process(const vector_t *var_list, FILE *out_fh) {
     pthread_mutex_init(&w->r_lock, NULL);
 
     pthread_t tid[nthread];
-    print_status("# Start pool %s", asctime(time_info));
     for (i = 0; i < nthread; i++) pthread_create(&tid[i], NULL, pool, w);
     for (i = 0; i < nthread; i++) pthread_join(tid[i], NULL);
     pthread_mutex_destroy(&w->q_lock);
@@ -1342,7 +1356,7 @@ int main(int argc, char **argv) {
         {"vcf", required_argument, NULL, 'v'},
         {"bam", required_argument, NULL, 'a'},
         {"ref", required_argument, NULL, 'r'},
-        {"read", required_argument, NULL, 'f'},
+        {"read", optional_argument, NULL, 'f'},
         {"out", optional_argument, NULL, 'o'},
         {"nthread", optional_argument, NULL, 't'},
         {"sharedr", optional_argument, NULL, 's'},
@@ -1409,7 +1423,6 @@ int main(int argc, char **argv) {
     }
     if (bam_file == NULL) { exit_usage("Missing alignments given as BAM file!"); } 
     if (fa_file == NULL) { exit_usage("Missing reference genome given as Fasta file!"); }
-    if (fq_file == NULL) { exit_usage("Missing read given as Fastq file!"); }
     if (nthread < 1) nthread = 1;
     if (sharedr < 0 || sharedr > 2) sharedr = 0;
     if (distlim < 0) distlim = 10;
@@ -1436,12 +1449,23 @@ int main(int argc, char **argv) {
     if (out_file != NULL) out_fh = fopen(out_file, "w"); // default output file handle is stdout unless output file option is used
     
     /* Teagle */
-    readlist = fopen(readlist_name, "w");
-    ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
-    char *FAname = get_FAname(fq_file);
-    print_status("# FAnames: %s \t %s", FAname, asctime(time_info));
-    read_idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
-    FA_readlist = get_Read(fq_file);
+    if (fq_file != NULL){
+        readlist = fopen(readlist_name, "w");
+        pileup = fopen(pileup_name, "w");
+        ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
+        char *FAname = get_FAname(fq_file);
+        print_status("# FAnames: %s \t %s", FAname, asctime(time_info));
+        FA_readlist = get_Read(fq_file); //create read_fa
+        // TODO
+        // char *cmd = "./bwa/bwa index ";
+        // char *new_str;
+
+        // strcat(cmd, FAname);
+        // system(cmd);
+        read_idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
+        
+    }
+
 
     init_seqnt_map(seqnt_map);
     init_q2p_table(p_match, p_mismatch, 50);
@@ -1460,11 +1484,12 @@ int main(int argc, char **argv) {
     if (out_file != NULL) fclose(out_fh);
     else fflush(stdout);
     /* Teagle */
-    fclose(readlist);
+    if (fq_file != NULL){
+        fclose(readlist);
+        bwa_idx_destroy(ref_idx);
+        bwa_idx_destroy(read_idx);
+    }
 
-    bwa_idx_destroy(ref_idx);
-    bwa_idx_destroy(read_idx);
-    
     pthread_mutex_destroy(&refseq_lock);
 
     khiter_t k;
