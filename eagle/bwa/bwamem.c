@@ -1179,7 +1179,7 @@ mem_aln_t mem_reg2aln(const mem_opt_t *opt, const bntseq_t *bns, const uint8_t *
 		}
 	}
 	a.rid = bns_pos2rid(bns, pos);
-	assert(a.rid == ar->rid);
+	// assert(a.rid == ar->rid); TODO
 	a.pos = pos - bns->anns[a.rid].offset;
 	a.score = ar->score; a.sub = ar->sub > ar->csub? ar->sub : ar->csub;
 	a.is_alt = ar->is_alt; a.alt_sc = ar->alt_sc;

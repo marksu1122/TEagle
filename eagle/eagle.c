@@ -6,7 +6,7 @@ the alternative hypothesis against the reference hypothesis
 Copyright 2016 Tony Kuo
 This program is distributed under the terms of the GNU General Public License
 */
-
+#include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <float.h>
@@ -85,15 +85,18 @@ static pthread_mutex_t refseq_lock;
 
 static bwaidx_t *ref_idx;
 static bwaidx_t *read_idx;
-static vector_t *FA_readlist;
 int hypo_length;
 // Teagle
 FILE *readlist;
 FILE *pileup;
 // output file name
-static char *readlist_name = "./more_Find";
-static char *pileup_name = "./more_pileup";
-
+static char *readlist_name = "./Find";
+static char *pileup_name = "./pileup";
+static char *Rseq = "./EAGLE_temp_seq";
+static char *Rqual = "./EAGLE_temp_qual";
+FILE *read_seq;
+FILE *read_qual;
+double total_find = 0;
 
 static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length,int *hypo_pos){
 
@@ -178,10 +181,12 @@ char *get_FAname(char *fileName) {
     return FAname;
 }
 
-static vector_t * get_Read(const char *fq_file){
+static int get_Read(const char *fq_file){
     gzFile fp;
     kseq_t *ks;
     FILE *read_FA;
+    FILE *read_seq;
+    FILE *read_qual;
     fp = gzopen(fq_file, "r");
     if(fp == NULL ) {
         // file doesn't exist
@@ -191,29 +196,24 @@ static vector_t * get_Read(const char *fq_file){
     ks = kseq_init(fp); // initialize the FASTA/Q parser
     char *fa_name = get_FAname(fq_file);
     read_FA = fopen(fa_name, "w");
-
-    FA_readlist = vector_create(64, BSEQ_T);
+    read_seq = fopen(Rseq, "w");
+    read_qual = fopen(Rqual, "w");
 
     while (kseq_read(ks) >= 0){ // read one sequence
         fprintf(read_FA, ">%s\n", ks->name.s);
         fprintf(read_FA, "%s\n", ks->seq.s);
-
+        fprintf(read_seq, "%s\n", ks->seq.s);
+        fprintf(read_qual, "%s\n", ks->qual.s);
         hypo_length = ks->seq.l;
-        bseq1_t *read = malloc(sizeof(bseq1_t));
-        read->name = strdup(ks->name.s);
-        read->seq = strdup(ks->seq.s);
-        read->comment = NULL;
-        read->qual = strdup(ks->qual.s);
-        read->l_seq = ks->seq.l;
 
-        vector_add(FA_readlist, read);
     }
 
     kseq_destroy(ks);
     fclose(read_FA);
+    fclose(read_seq);
+    fclose(read_qual);
     gzclose(fp);
-
-    return FA_readlist;
+    return 0;
 }
 
 static char* strrev(char *str){
@@ -242,7 +242,7 @@ static int check(char *name,vector_t * read_list){
     return 1;
 }
 
-read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, int pao, int isc, int nodup, int splice, int phred64, int const_qual){
+read_t *gethypoRead(char *rseq,char *rqual,bwaidx_t *ref_idx,mem_aln_t b,char *name, int pao, int isc, int nodup, int splice, int phred64, int const_qual){
     read_t * hyporead = read_create(name, b.rid, ref_idx->bns->anns[b.rid].name, b.pos);
     int i, j;
     mem_aln_t *p = &b, mtmp,*m = 0;
@@ -262,53 +262,6 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
     if (flag != NULL) hyporead->flag = strdup(flag);
     else hyporead->flag = NULL;
     free(flag); flag = NULL;
-
-    int n;
-    char *s, token[strlen(hyporead->flag) + 1];
-    for (s = hyporead->flag; sscanf(s, "%[^,]%n", token, &n) == 1; s += n + 1) {
-        if (strcmp("DUP", token) == 0) hyporead->is_dup = 1;
-        else if (strcmp("REVERSE", token) == 0) hyporead->is_reverse = 1;
-        else if (strcmp("SECONDARY", token) == 0 || strcmp("SUPPLEMENTARY", token) == 0) hyporead->is_secondary = 1;
-        else if (strcmp("READ2", token) == 0) hyporead->is_read2 = 1;
-        if (*(s + n) != ',') break;
-    }
-
-    char *seq = (char*)malloc(FA_read->l_seq);
-    char *qual = (char*)malloc(FA_read->l_seq);
-
-    if(!p->is_rev){
-        int qb = 0, qe = FA_read->l_seq;
-        //TODO check
-        // if (p->n_cigar && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) { // have cigar && not the primary alignment && not softclip all
-		// 	if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qb += p->cigar[0]>>4;
-		// 	if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qe -= p->cigar[p->n_cigar-1]>>4;
-		// }
-		for (i = qb; i < qe; ++i) seq[i] = FA_read->seq[i];//nst_nt4_table[(int)FA_read->seq[i]];
-		for (i = qb; i < qe; ++i) qual[i] = FA_read->qual[i];
-    }else{
-        int qb = 0, qe = FA_read->l_seq;
-		//TODO check
-        // if (p->n_cigar && !(opt->flag&MEM_F_SOFTCLIP) && !p->is_alt) {
-		// 	if ((p->cigar[0]&0xf) == 4 || (p->cigar[0]&0xf) == 3) qe -= p->cigar[0]>>4;
-		// 	if ((p->cigar[p->n_cigar-1]&0xf) == 4 || (p->cigar[p->n_cigar-1]&0xf) == 3) qb += p->cigar[p->n_cigar-1]>>4;
-		// }
-        for (i = qe-1; i >= qb; --i){
-            if(FA_read->seq[i] == 'A'){
-                seq[i] = 'T';
-            }else if(FA_read->seq[i] =='T'){
-                seq[i] = 'A';
-            }else if(FA_read->seq[i] =='C'){
-                seq[i] = 'G';
-            }else if(FA_read->seq[i] =='G'){
-                seq[i] = 'C';
-            }else{
-                seq[i] = FA_read->seq[i];//nst_nt4_table[(int)FA_read->seq[i]];
-            }
-        } 
-        for (i = qe-1; i >= qb; --i) qual[i] = FA_read->qual[i];
-
-    }
-
 
     int start_align = 0;
     int s_offset = 0; // offset for softclip at start
@@ -358,29 +311,24 @@ read_t *gethypoRead(bseq1_t * FA_read,bwaidx_t *ref_idx,mem_aln_t b,char *name, 
         hyporead->end -= e_offset; // compensate for soft clip in mapped position
     }
     
-    hyporead->length = FA_read->l_seq - (s_offset + e_offset);
+    hyporead->length =strlen(rseq)- (s_offset + e_offset);
     hyporead->qseq = malloc((hyporead->length + 1) * sizeof (hyporead->qseq));
     hyporead->qual = malloc(hyporead->length  * sizeof (hyporead->qual));
     //TODO check
     for (i = 0; i < hyporead->length; i++) {
-        hyporead->qseq[i] = seq[i];
+        hyporead->qseq[i] = rseq[i];
         if (const_qual > 0) hyporead->qual[i] = const_qual;
-        else hyporead->qual[i] = (phred64) ? (int)qual[i] - 31 : (int)qual[i]; // account for phred64
+        else hyporead->qual[i] = (phred64) ? (int)rqual[i] - 31 : (int)rqual[i]; // account for phred64
     }
     hyporead->qseq[hyporead->length] = '\0';
-    //TODO
     hyporead->multimapXA = NULL;
-    // if (bam_aux_get(aln, "XA")) read->multimapXA = strdup(bam_aux2Z(bam_aux_get(aln, "XA"))); //TODO
     hyporead->multimapNH = 1;
-    // if (bam_aux_get(aln, "NH")) read->multimapNH = bam_aux2i(bam_aux_get(aln, "NH")); //TODO
-
     free(b.cigar); // don't forget to deallocate CIGAR
 
     return hyporead;
 }
 
-static vector_t *Gradu(vector_t * FA_readlist,vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
-    bseq1_t **FAread_data = (bseq1_t **)FA_readlist->data;
+static vector_t *Gradu(vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
     for (int i = 0; i < varset_len; i++){
         //Construct alt seq;
         //TODO int overflow
@@ -399,11 +347,22 @@ static vector_t *Gradu(vector_t * FA_readlist,vector_t * read_list,const char *r
                 continue;
             }
             int temp = ar.a[j].qb; //for print
-            mem_aln_t a;
-            //TODO need? or get pos to get rid and then get name
-            a = mem_reg2aln(opt, read_idx->bns, read_idx->pac, strlen(hyposeq->chr), hyposeq->chr, &ar.a[j]); // get forward-strand position and CIGAR
+            int *temp_len = hypo_length;
 
-            char *name = strdup(read_idx->bns->anns[a.rid].name);
+            char *rqual = malloc(hypo_length + 1);
+            char *rseq = malloc(hypo_length + 1);
+
+            int read_rev;
+            long long read_pos = bns_depos(read_idx->bns, ar.a[j].rb  < read_idx->bns->l_pac? ar.a[j].rb  : ar.a[j].re - 1, &read_rev);
+            long long rs = (read_pos/hypo_length) * (hypo_length+1);
+            fseeko64(read_seq, rs, SEEK_SET);
+            fseeko64(read_qual, rs, SEEK_SET);
+            fread(rseq, 1, hypo_length, read_seq);
+            fread(rqual, 1, hypo_length, read_qual);
+            rseq[hypo_length] = '\0';
+            rqual[hypo_length] = '\0';
+            int rid  = bns_pos2rid(read_idx->bns, read_pos);
+            char *name = strdup(read_idx->bns->anns[rid].name);
             //TODO overflow??
             long long rb = ar.a[j].rb;
             int r_len = ar.a[j].re - ar.a[j].rb;
@@ -415,22 +374,38 @@ static vector_t *Gradu(vector_t * FA_readlist,vector_t * read_list,const char *r
                 ar.a[j].rb = *hypo_pos- 1 + ar.a[j].qb ;
                 ar.a[j].re = ar.a[j].rb + q_len;
             }
-
             ar.a[j].qb = rb% hypo_length;
             ar.a[j].qe = ar.a[j].qb+r_len;
-            
+            if(read_rev){
+                char *temp_s = strdup(rseq);
+                char *temp_q = strdup(rqual);
+                for (int k = hypo_length-1; k >= 0; k--){
+                    if(temp_s[k] == 'A'){
+                        rseq[hypo_length-k-1] = 'T';
+                    }else if(temp_s[k] =='T'){
+                        rseq[hypo_length-k-1] = 'A';
+                    }else if(temp_s[k] =='C'){
+                        rseq[hypo_length-k-1] = 'G';
+                    }else if(temp_s[k] =='G'){
+                        rseq[hypo_length-k-1] = 'C';
+                    }else{
+                        rseq[hypo_length-k-1] = temp_s[k];
+                    }
+                    rqual[hypo_length-k-1] = temp_q[k];
+                }
+            }
+
             if(check(name, read_list)){
                 fprintf(readlist, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
-                for (int z = 0; z < FA_readlist->len; z++){
-                    if(!strcmp(name , FAread_data[z]->name)){
-                        mem_aln_t b;
-                        b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, FAread_data[z]->l_seq, FAread_data[z]->seq, &ar.a[j]);
-                        read_t *hypoRead = gethypoRead(FAread_data[z],ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
-                        fprintf(readlist, "%s\t%d\t%d\t%d\t%s",hypoRead->name,temp,ar.a[j].qb,hypoRead->is_reverse, hypoRead->qseq);
-                        vector_add(read_list, hypoRead);
-                        break;
-                    }
+                mem_aln_t b;
+                b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, strlen(rseq), rseq, &ar.a[j]);
+                read_t *hypoRead = gethypoRead(rseq,rqual,ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
+                fprintf(readlist, "%s\t%d\t%d\t%d\t%s",hypoRead->name,temp,ar.a[j].qb,hypoRead->is_reverse, hypoRead->qseq);
+                if(read_rev){
+                    hypoRead->is_reverse = 1;
                 }
+                vector_add(read_list, hypoRead);
+
                 fprintf(readlist, "\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
             }
         }
@@ -850,7 +825,11 @@ static char *evaluate(vector_t *var_set) {
 
     /* Reads in variant region coordinates */
     vector_t *read_list = bam_fetch(bam_file, var_data[0]->chr, var_data[0]->pos, var_data[var_set->len - 1]->pos);
-   
+    //TODO? move
+    if (read_list->len == 0) {
+        vector_destroy(read_list); free(read_list); read_list = NULL;
+        return NULL;
+    }
     // Teagle
 
     // TODO index
@@ -868,7 +847,7 @@ static char *evaluate(vector_t *var_set) {
         double e;
         clock_gettime(CLOCK_MONOTONIC, &s);
         int before = read_list->len;
-        read_list = Gradu(FA_readlist, read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
+        read_list = Gradu(read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
         //PRINT(LOG)
         if(before  < read_list->len){
             fprintf(pileup, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
@@ -892,19 +871,15 @@ static char *evaluate(vector_t *var_set) {
             }
             fprintf(readlist,"]\n");
             fprintf(readlist, "==========================================\n");
-        }else{
-            
         }
+        
         clock_gettime(CLOCK_MONOTONIC, &d);
         e = (d.tv_sec - s.tv_sec);
         e += (d.tv_nsec - s.tv_nsec) / 1000000000.0;
-        print_status("# Done Find read (sec):\t%f\n", e);
+        total_find += e;
+        // print_status("# Done Find read (sec):\t%f\n", e);
     }
- //TODO? move
-    if (read_list->len == 0) {
-        vector_destroy(read_list); free(read_list); read_list = NULL;
-        return NULL;
-    }
+    
     read_t **read_data = (read_t **)read_list->data;
 
     /* Variant combinations as a vector of vectors */
@@ -1451,10 +1426,11 @@ int main(int argc, char **argv) {
         pileup = fopen(pileup_name, "w");
         ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
         char *FAname = get_FAname(fq_file);
-
-        FA_readlist = get_Read(fq_file); //create read_fa
+        int x = get_Read(fq_file); //create read_fa
+        read_seq = fopen(Rseq, "r");
+        read_qual = fopen(Rqual, "r");
         // TODO
-        // char *cmd = "./bwa/bwa index ";
+        char *cmd = "../../bwa/bwa index ./read/NIST7035_TAAGGCGA_L001_R1_001.fasta";
         // char *new_str;
 
         // strcat(cmd, FAname);
@@ -1498,11 +1474,16 @@ int main(int argc, char **argv) {
     }
     kh_destroy(rsh, refseq_hash);
     vector_destroy(var_list); free(var_list); var_list = NULL;
-
-
+    if (fq_file != NULL){
+        remove(Rseq);
+        remove(Rqual);
+    }
     clock_gettime(CLOCK_MONOTONIC, &finish);
     elapsed = (finish.tv_sec - start.tv_sec);
     elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
+    print_status("# Done Find read (sec):\t%f\n", total_find);
+    print_status("# CPU time (sec):\t%f\n",elapsed);
     print_status("# CPU time (hr):\t%f\n",elapsed / 3600);
+    
     return 0;
 }
