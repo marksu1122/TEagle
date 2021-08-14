@@ -89,17 +89,11 @@ int hypo_length;
 // Teagle
 FILE *readlist;
 FILE *pileup;
-// output file name
-static char *readlist_name = "./Find";
-static char *pileup_name = "./pileup";
-static char *Rseq = "./EAGLE_temp_seq";
-static char *Rqual = "./EAGLE_temp_qual";
-FILE *read_seq;
-FILE *read_qual;
+static vector_t *all_reads;
+//log_file
 double total_find = 0;
 
 static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t *variant, int hypo_length,int *hypo_pos){
-
 
     //vcf pos start from 1, choose where to start
     int pos = variant->pos - 1;
@@ -184,9 +178,6 @@ char *get_FAname(char *fileName) {
 static int get_Read(const char *fq_file){
     gzFile fp;
     kseq_t *ks;
-    FILE *read_FA;
-    FILE *read_seq;
-    FILE *read_qual;
     fp = gzopen(fq_file, "r");
     if(fp == NULL ) {
         // file doesn't exist
@@ -194,24 +185,13 @@ static int get_Read(const char *fq_file){
         return 1;
     }
     ks = kseq_init(fp); // initialize the FASTA/Q parser
-    char *fa_name = get_FAname(fq_file);
-    read_FA = fopen(fa_name, "w");
-    read_seq = fopen(Rseq, "w");
-    read_qual = fopen(Rqual, "w");
-
+    all_reads = vector_create(8, VARIANT_T);
     while (kseq_read(ks) >= 0){ // read one sequence
-        fprintf(read_FA, ">%s\n", ks->name.s);
-        fprintf(read_FA, "%s\n", ks->seq.s);
-        fprintf(read_seq, "%s\n", ks->seq.s);
-        fprintf(read_qual, "%s\n", ks->qual.s);
         hypo_length = ks->seq.l;
-
+        variant_t *read = variant_create(ks->name.s, 0, ks->seq.s, ks->qual.s);	
+        vector_add(all_reads, read);	
     }
-
     kseq_destroy(ks);
-    fclose(read_FA);
-    fclose(read_seq);
-    fclose(read_qual);
     gzclose(fp);
     return 0;
 }
@@ -328,13 +308,12 @@ read_t *gethypoRead(char *rseq,char *rqual,bwaidx_t *ref_idx,mem_aln_t b,char *n
     return hyporead;
 }
 
-static vector_t *Gradu(vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
+static vector_t *find_matchHypoRead(vector_t * read_list,const char *refseq, int refseq_length, variant_t **var_data,size_t varset_len, int hypo_length){
     for (int i = 0; i < varset_len; i++){
         //Construct alt seq;
         //TODO int overflow
         int *hypo_pos = malloc(sizeof(int));
         region_t *hyposeq = hypothesis_seq(refseq,refseq_length,var_data[i],hypo_length,hypo_pos);
-        fprintf(readlist, "hypo:\t%d\t%s\t%s\t%d\t%s\t%d\t%d\n",var_data[i]->pos,var_data[i]->ref,var_data[i]->alt,*hypo_pos,hyposeq->chr,hyposeq->pos1,hyposeq->pos2);
         mem_alnreg_v ar;
         mem_opt_t *opt;
         opt = mem_opt_init(); 
@@ -342,6 +321,7 @@ static vector_t *Gradu(vector_t * read_list,const char *refseq, int refseq_lengt
         int start = hyposeq->pos1;
         int end = hyposeq->pos2;
         //[start,end) index start from 0 
+        variant_t **reads = (variant_t **)all_reads->data;
         for (int j = 0; j < ar.n; ++j) { // traverse each hit
             if(start >= ar.a[j].qe ||end <= ar.a[j].qb){ //NOT cover hypo_part
                 continue;
@@ -354,13 +334,10 @@ static vector_t *Gradu(vector_t * read_list,const char *refseq, int refseq_lengt
 
             int read_rev;
             long long read_pos = bns_depos(read_idx->bns, ar.a[j].rb  < read_idx->bns->l_pac? ar.a[j].rb  : ar.a[j].re - 1, &read_rev);
-            long long rs = (read_pos/hypo_length) * (hypo_length+1);
-            fseeko64(read_seq, rs, SEEK_SET);
-            fseeko64(read_qual, rs, SEEK_SET);
-            fread(rseq, 1, hypo_length, read_seq);
-            fread(rqual, 1, hypo_length, read_qual);
-            rseq[hypo_length] = '\0';
-            rqual[hypo_length] = '\0';
+            long long rs = read_pos/hypo_length;
+            strcpy(rseq, reads[rs]->ref);
+            strcpy(rqual, reads[rs]->alt);
+
             int rid  = bns_pos2rid(read_idx->bns, read_pos);
             char *name = strdup(read_idx->bns->anns[rid].name);
             //TODO overflow??
@@ -396,17 +373,13 @@ static vector_t *Gradu(vector_t * read_list,const char *refseq, int refseq_lengt
             }
 
             if(check(name, read_list)){
-                fprintf(readlist, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
                 mem_aln_t b;
                 b = mem_reg2aln(opt, ref_idx->bns, ref_idx->pac, strlen(rseq), rseq, &ar.a[j]);
                 read_t *hypoRead = gethypoRead(rseq,rqual,ref_idx,b,name, pao, isc, nodup, splice, phred64, const_qual);
-                fprintf(readlist, "%s\t%d\t%d\t%d\t%s",hypoRead->name,temp,ar.a[j].qb,hypoRead->is_reverse, hypoRead->qseq);
                 if(read_rev){
                     hypoRead->is_reverse = 1;
                 }
                 vector_add(read_list, hypoRead);
-
-                fprintf(readlist, "\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
             }
         }
 
@@ -825,59 +798,14 @@ static char *evaluate(vector_t *var_set) {
 
     /* Reads in variant region coordinates */
     vector_t *read_list = bam_fetch(bam_file, var_data[0]->chr, var_data[0]->pos, var_data[var_set->len - 1]->pos);
-    //TODO? move
+    //TODO move? before or after find new read match hypothetical sequence
     if (read_list->len == 0) {
         vector_destroy(read_list); free(read_list); read_list = NULL;
         return NULL;
     }
-    // Teagle
-
-    // TODO index
-    // char *index_argv[2];
-    // index_argv[0] = "index";
-    // index_argv[1] = FAname;
-    // int ret = bwa_index(2, index_argv); //BUG
-    
-    // char *cmd = "./bwa/bwa index ";
-    // strcat(cmd, FAname);
-    // system(cmd);
-    
+    // Find read match hypothetical sequence
     if (fq_file != NULL){
-        struct timespec s, d;
-        double e;
-        clock_gettime(CLOCK_MONOTONIC, &s);
-        int before = read_list->len;
-        read_list = Gradu(read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
-        //PRINT(LOG)
-        if(before  < read_list->len){
-            fprintf(pileup, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n");
-            fprintf(pileup,"[");
-            for (int k = 0; k < var_set->len; k++) { 
-                fprintf(pileup, "%s,%d,%s,%s;", var_data[k]->chr, var_data[k]->pos, var_data[k]->ref, var_data[k]->alt);
-            }
-            fprintf(pileup,"]\n");
-            read_t **read = (read_t **)read_list->data;
-            for (int k = 0; k < read_list->len;k++){
-                if(k == before){
-                    fprintf(pileup, "==========================================\n");
-                }
-                fprintf(pileup, "%s\t%d\t%s\t\n",read[k]->name ,read[k]->pos+1, read[k]->qseq);
-            }
-            fprintf(pileup, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
-
-            fprintf(readlist,"[");
-            for (int k = 0; k < var_set->len; k++) { 
-                fprintf(readlist, "%s,%d,%s,%s;", var_data[k]->chr, var_data[k]->pos, var_data[k]->ref, var_data[k]->alt);
-            }
-            fprintf(readlist,"]\n");
-            fprintf(readlist, "==========================================\n");
-        }
-        
-        clock_gettime(CLOCK_MONOTONIC, &d);
-        e = (d.tv_sec - s.tv_sec);
-        e += (d.tv_nsec - s.tv_nsec) / 1000000000.0;
-        total_find += e;
-        // print_status("# Done Find read (sec):\t%f\n", e);
+        read_list = find_matchHypoRead(read_list, refseq, refseq_length, var_data, var_set->len, hypo_length);
     }
     
     read_t **read_data = (read_t **)read_list->data;
@@ -1427,8 +1355,6 @@ int main(int argc, char **argv) {
         ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
         char *FAname = get_FAname(fq_file);
         int x = get_Read(fq_file); //create read_fa
-        read_seq = fopen(Rseq, "r");
-        read_qual = fopen(Rqual, "r");
         // TODO
         char *cmd = "../../bwa/bwa index ./read/NIST7035_TAAGGCGA_L001_R1_001.fasta";
         // char *new_str;
