@@ -2,3 +2,7 @@
 .vscode/launch.json
 .vscode/settings.json
 .vscode/tasks.json
+eagle/.vscode/c_cpp_properties.json
+eagle/.vscode/launch.json
+eagle/.vscode/settings.json
+eagle/.vscode/tasks.json
