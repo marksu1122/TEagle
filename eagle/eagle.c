@@ -163,7 +163,7 @@ static region_t *hypothesis_seq(const char *refseq, int refseq_length, variant_t
     return hypo_seq;
 }
 
-//TODO read_t
+
 char *get_FAname(char *fileName) {
     char * FAname = malloc(sizeof *fileName * (strlen(fileName) + 6));
     strcpy(FAname, fileName);
@@ -185,6 +185,7 @@ static int get_Read(const char *fq_file){
         return 1;
     }
     ks = kseq_init(fp); // initialize the FASTA/Q parser
+    //TODO read struct vector
     all_reads = vector_create(8, VARIANT_T);
     while (kseq_read(ks) >= 0){ // read one sequence
         hypo_length = ks->seq.l;
@@ -222,6 +223,7 @@ static int check(char *name,vector_t * read_list){
     return 1;
 }
 
+//need to check reverse and clean code
 read_t *gethypoRead(char *rseq,char *rqual,bwaidx_t *ref_idx,mem_aln_t b,char *name, int pao, int isc, int nodup, int splice, int phred64, int const_qual){
     read_t * hyporead = read_create(name, b.rid, ref_idx->bns->anns[b.rid].name, b.pos);
     int i, j;
@@ -300,6 +302,7 @@ read_t *gethypoRead(char *rseq,char *rqual,bwaidx_t *ref_idx,mem_aln_t b,char *n
         if (const_qual > 0) hyporead->qual[i] = const_qual;
         else hyporead->qual[i] = (phred64) ? (int)rqual[i] - 31 : (int)rqual[i]; // account for phred64
     }
+    //TODO maybe can match another pos
     hyporead->qseq[hyporead->length] = '\0';
     hyporead->multimapXA = NULL;
     hyporead->multimapNH = 1;
@@ -344,7 +347,8 @@ static vector_t *find_matchHypoRead(vector_t * read_list,const char *refseq, int
             long long rb = ar.a[j].rb;
             int r_len = ar.a[j].re - ar.a[j].rb;
             int q_len = ar.a[j].qe - ar.a[j].qb;
-            if(ar.a[j].qb >= start){//TODO DEL 
+
+            if(ar.a[j].qb >= start){//TODO DEL variant 
                 ar.a[j].re = *hypo_pos-1 + ar.a[j].qe - (strlen(var_data[i]->alt) - strlen(var_data[i]->ref));
                 ar.a[j].rb = ar.a[j].re - q_len;
             }else{
@@ -1350,15 +1354,12 @@ int main(int argc, char **argv) {
     
     /* Teagle */
     if (fq_file != NULL){
-        readlist = fopen(readlist_name, "w");
-        pileup = fopen(pileup_name, "w");
         ref_idx = bwa_idx_load(fa_file, BWA_IDX_ALL); // load the BWA index
         char *FAname = get_FAname(fq_file);
         int x = get_Read(fq_file); //create read_fa
-        // TODO
+        // TODO error!!
         char *cmd = "../../bwa/bwa index ./read/NIST7035_TAAGGCGA_L001_R1_001.fasta";
         // char *new_str;
-
         // strcat(cmd, FAname);
         // system(cmd);
         read_idx = bwa_idx_load(FAname, BWA_IDX_ALL); // load the BWA index
@@ -1400,10 +1401,7 @@ int main(int argc, char **argv) {
     }
     kh_destroy(rsh, refseq_hash);
     vector_destroy(var_list); free(var_list); var_list = NULL;
-    if (fq_file != NULL){
-        remove(Rseq);
-        remove(Rqual);
-    }
+
     clock_gettime(CLOCK_MONOTONIC, &finish);
     elapsed = (finish.tv_sec - start.tv_sec);
     elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
